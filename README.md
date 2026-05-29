@@ -1,108 +1,265 @@
 <img width="1920" height="919" alt="screencapture-file-E-tegrako-monument-2-html-2026-05-18-18_03_00" src="https://github.com/user-attachments/assets/443415fc-82b1-4011-9634-72071de3f9d1" />
 
-# TegrakoBot
+# Tegrako Bot
 
-Telegram-бот для продажи VPN-подписок на базе [Remnawave](https://remna.st).
+Telegram-бот для работы с Remnawave.
 
-## Возможности
+Позволяет управлять пользователями, подписками и сервисными задачами прямо через Telegram без необходимости постоянно заходить в панель.
 
-- 👤 Регистрация через `@username` Telegram или ввод вручную с проверкой уникальности в панели
-- 🔄 Автоопределение существующих пользователей Remnawave при миграции
-- 🛒 Покупка подписки: выбор тарифа → реквизиты → скриншот оплаты
-- ✅ Ручное подтверждение платежей администратором
-- 👤 Личный кабинет: статус подписки, ссылка, устройства, история платежей
-- 🎫 Встроенная поддержка: тикеты прямо в боте, ответы через бота
-- 📦 Конструктор тарифов в боте (лимит трафика, устройств, срок, цена)
-- 📡 Управление нодами: просмотр статуса, перезагрузка
-- 🔧 Режим тех. работ с автоуведомлением пользователей
-- ⏰ Автоматические уведомления об истечении подписки
-- 📢 Рассылка по сегментам (все / активные / истёкшие)
-- 🚫 Бан пользователей
-- 📊 Статистика: выручка, пользователи, ноды
+---
 
-## Стек
+## 🚀 Возможности
 
-- Python 3.12
-- aiogram 3.x
-- SQLAlchemy 2.x + asyncpg (PostgreSQL)
-- [remnawave Python SDK](https://github.com/remnawave/python-sdk)
-- Docker + Docker Compose
+### Пользователь
 
-## Установка
+- `/start`
+- управление подпиской
+- взаимодействие с сервисом через Telegram
+- обращения в поддержку
+- работа с личными данными
 
-### 1. Клонируй репозиторий
+### Администратор
 
-```bash
-git clone https://github.com/ТВО_ЛОГИН/tegrabot.git
-cd tegrabot
-```
+- административные команды
+- управление пользователями
+- модерация
+- проверка ограничений
 
-### 2. Настрой переменные окружения
+### Сервисное
 
-```bash
-cp .env.example .env
-nano .env
-```
+- интеграция с Remnawave API
+- PostgreSQL
+- фоновые задачи через scheduler
+- middleware
+- Docker deployment
 
-Заполни обязательные поля:
+---
 
-| Переменная | Описание |
+## 🛠 Stack
+
+| Что | Используется |
 |---|---|
-| `BOT_TOKEN` | Токен бота от [@BotFather](https://t.me/BotFather) |
-| `ADMIN_IDS` | Твой Telegram ID (можно несколько через запятую) |
-| `DATABASE_URL` | `postgresql+asyncpg://user:pass@db/tegrabot` |
-| `PANEL_API_URL` | URL твоей панели Remnawave |
-| `PANEL_API_KEY` | API ключ из панели (раздел API Tokens) |
-| `PAYMENT_REQUISITES` | Реквизиты в формате `Название\|Реквизиты;Название2\|Реквизиты2` |
+| Язык | Python 3.12 |
+| Telegram | aiogram 3 |
+| База | PostgreSQL |
+| ORM | SQLAlchemy |
+| API | Remnawave |
+| Контейнеры | Docker / Docker Compose |
 
-### 3. Запусти
+---
+
+## 📁 Структура проекта
 
 ```bash
-docker compose up -d
-```
-
-### 4. Создай первый тариф
-
-Напиши боту `/admin` → **Тарифы** → **➕ Создать тариф**
-
-## Структура проекта
-
-```
-tegrabot/
+.
 ├── bot/
 │   ├── handlers/
-│   │   ├── user/          # start, payment, support
-│   │   └── admin/         # admin panel
-│   ├── keyboards/         # inline & reply keyboards
-│   ├── middlewares/       # db session, ban check
+│   │   ├── user/
+│   │   └── admin/
+│   ├── middlewares/
 │   ├── services/
-│   │   ├── remnawave.py   # Remnawave SDK wrapper
-│   │   └── scheduler.py   # уведомления об истечении
-│   └── states/            # FSM states
+│   ├── states/
+│   └── utils/
+│
 ├── config/
-│   └── settings.py        # pydantic-settings конфиг
 ├── db/
-│   ├── models.py          # SQLAlchemy модели
-│   ├── database.py        # подключение к БД
-│   └── dal.py             # Data Access Layer
 ├── main.py
 ├── Dockerfile
 ├── docker-compose.yml
+├── requirements.txt
 └── .env.example
 ```
 
-## Команды администратора
+---
 
-| Команда | Описание |
-|---|---|
-| `/admin` | Открыть панель администратора |
+# ⚙️ Установка
 
-Через панель доступно: статистика, пользователи, платежи, тикеты, тарифы, ноды, рассылка, тех. работы.
+## 1. Установка Docker
 
-## Миграция с Remnashop
+Перед запуском нужен Docker и Docker Compose.
 
-Бот автоматически определяет существующих пользователей Remnawave по `telegram_id` при первом `/start`. Пользователям не нужно ничего делать — их подписки сохранятся.
+### Ubuntu / Debian
 
-## Лицензия
+```bash
+sudo apt update
+sudo apt install docker.io docker-compose-plugin -y
+sudo systemctl enable docker
+sudo systemctl start docker
+```
 
-MIT
+### Проверка
+
+```bash
+docker --version
+docker compose version
+```
+
+> [!NOTE]
+> Если Remnawave Panel устанавливалась по официальной инструкции:
+>
+> https://docs.rw/docs/install/remnawave-panel
+>
+> Docker уже должен быть установлен, этот шаг можно пропустить.
+
+---
+
+## 2. Клонирование репозитория
+
+```bash
+git clone https://github.com/slamare/tegrako-bot
+cd tegrako-bot
+```
+
+---
+
+## 3. Настройка `.env`
+
+Создай файл:
+
+```bash
+cp .env.example .env
+```
+
+Заполни значения:
+
+```env
+BOT_TOKEN=
+
+ADMIN_IDS=
+
+DATABASE_URL=
+
+REMNAWAVE_URL=
+REMNAWAVE_TOKEN=
+```
+
+---
+
+## 4. Проверка Docker network
+
+В `docker-compose.yml` используется внешняя сеть:
+
+```yaml
+remnawave-network:
+  external: true
+```
+
+Проверка:
+
+```bash
+docker network ls
+```
+
+Если сети нет:
+
+```bash
+docker network create remnawave-network
+```
+
+---
+
+## 5. Запуск
+
+```bash
+docker compose up -d --build
+```
+
+Проверка:
+
+```bash
+docker ps
+```
+
+---
+
+# 📜 Логи
+
+### Все сервисы
+
+```bash
+docker compose logs -f
+```
+
+### Только бот
+
+```bash
+docker logs tegrabot -f
+```
+
+---
+
+# 🗄 PostgreSQL
+
+Данные сохраняются в volume:
+
+```bash
+tegrabot-db-data
+```
+
+Проверка:
+
+```bash
+docker volume ls
+```
+
+---
+
+# 🔗 Работа с Remnawave
+
+Бот подключается к панели через API.
+
+Проверь:
+
+- корректный `REMNAWAVE_URL`
+- актуальный `REMNAWAVE_TOKEN`
+- контейнер панели подключён к `remnawave-network`
+
+---
+
+# 🔄 Обновление
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+---
+
+# 🧩 Если что-то не работает
+
+## Бот не отвечает
+
+Проверь:
+
+- `BOT_TOKEN`
+- контейнер поднят
+- доступ к интернету
+
+---
+
+## Ошибка базы данных
+
+Проверь:
+
+- `DATABASE_URL`
+- PostgreSQL контейнер работает
+
+---
+
+## Нет подключения к Remnawave
+
+Проверь:
+
+- URL панели
+- API токен
+- docker network
+
+---
+
+## Контейнер завершился
+
+```bash
+docker compose logs -f
+```
+
+---
