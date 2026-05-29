@@ -1,7 +1,4 @@
-<<<<<<< HEAD
 <img width="1920" height="919" alt="screencapture-file-E-tegrako-monument-2-html-2026-05-18-18_03_00" src="https://github.com/user-attachments/assets/443415fc-82b1-4011-9634-72071de3f9d1" />
-=======
->>>>>>> 02f8835b787315833d67e8dd59b367f3bb0383e0
 # TegrakoBot
 
 Telegram-бот для продажи VPN-подписок на базе [Remnawave](https://remna.st).
