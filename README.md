@@ -1,4 +1,4 @@
-# TegraBot 🤖
+# TegrakoBot
 
 Telegram-бот для продажи VPN-подписок на базе [Remnawave](https://remna.st).
 
