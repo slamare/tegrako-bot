@@ -1,0 +1,44 @@
+version: "3.8"
+
+services:
+  tegrabot:
+    build: .
+    container_name: tegrabot
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - remnawave-network
+      - internal
+
+  db:
+    image: postgres:17-alpine
+    container_name: tegrabot-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tegrabot
+      POSTGRES_USER: tegrabot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - tegrabot-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tegrabot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+volumes:
+  tegrabot-db-data:
+    name: tegrabot-db-data
+
+networks:
+  # Общая сеть с remnawave — чтобы бот видел панель по имени контейнера
+  remnawave-network:
+    name: remnawave-network
+    external: true
+  internal:
+    driver: bridge

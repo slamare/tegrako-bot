@@ -1,0 +1,61 @@
+import asyncio
+import logging
+from datetime import datetime, timezone
+
+from aiogram import Bot
+from db.database import async_session_maker
+from db import dal
+from bot.services import remnawave
+from config.settings import settings
+
+logger = logging.getLogger(__name__)
+
+
+async def check_expiring_subscriptions(bot: Bot):
+    async with async_session_maker() as session:
+        users = await dal.get_all_users(session, only_registered=True)
+        notify_days = settings.notify_expiry_days
+
+        for user in users:
+            if not user.remnawave_uuid:
+                continue
+            try:
+                rw = await remnawave.get_subscription_info(user.remnawave_uuid)
+                if not rw:
+                    continue
+
+                now = datetime.now(timezone.utc)
+                days_left = (rw.expire_at - now).days
+                status = rw.status.value  # "ACTIVE", "EXPIRED", "DISABLED"
+
+                if status == "EXPIRED":
+                    if not await dal.was_notified(session, user.id, "expired"):
+                        await bot.send_message(user.telegram_id,
+                            "⚠️ <b>Ваша подписка истекла.</b>\n\nОформите новую — нажмите «🛒 Купить подписку».",
+                            parse_mode="HTML")
+                        await dal.log_notification(session, user.id, "expired")
+
+                elif status == "ACTIVE":
+                    for d in notify_days:
+                        if days_left == d:
+                            meta = f"days_{d}"
+                            if not await dal.was_notified(session, user.id, "expiring_soon", meta):
+                                word = "день" if d == 1 else "дня" if d < 5 else "дней"
+                                await bot.send_message(user.telegram_id,
+                                    f"⏰ <b>Подписка истекает через {d} {word}!</b>\n\n"
+                                    f"Продлите — нажмите «🛒 Купить подписку».",
+                                    parse_mode="HTML")
+                                await dal.log_notification(session, user.id, "expiring_soon", meta)
+
+            except Exception as e:
+                logger.warning(f"Notification check failed for {user.telegram_id}: {e}")
+
+
+async def scheduler(bot: Bot):
+    """Проверка каждые 6 часов."""
+    while True:
+        try:
+            await check_expiring_subscriptions(bot)
+        except Exception as e:
+            logger.error(f"Scheduler error: {e}")
+        await asyncio.sleep(6 * 3600)
