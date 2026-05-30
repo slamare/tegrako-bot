@@ -1,7 +1,6 @@
 from typing import Callable, Awaitable, Any
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Message, CallbackQuery
-from db.database import async_session_maker
 from db import dal
 
 
@@ -9,6 +8,7 @@ class DatabaseMiddleware(BaseMiddleware):
     """Инжектирует сессию БД в каждый хендлер."""
 
     async def __call__(self, handler: Callable, event: TelegramObject, data: dict) -> Any:
+        from db.database import async_session_maker
         async with async_session_maker() as session:
             data["session"] = session
             return await handler(event, data)

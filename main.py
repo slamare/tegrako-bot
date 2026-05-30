@@ -16,26 +16,22 @@ logger = logging.getLogger(__name__)
 
 
 async def main():
-    # БД
     init_db(settings.DATABASE_URL)
     await create_tables()
 
     bot = Bot(token=settings.BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
 
-    # Middlewares
     dp.message.middleware(DatabaseMiddleware())
     dp.callback_query.middleware(DatabaseMiddleware())
     dp.message.middleware(BanCheckMiddleware())
     dp.callback_query.middleware(BanCheckMiddleware())
 
-    # Роутеры
     dp.include_router(start.router)
     dp.include_router(payment.router)
     dp.include_router(support.router)
     dp.include_router(admin.router)
 
-    # Фоновый планировщик
     asyncio.create_task(scheduler(bot))
 
     logger.info("Bot started")
