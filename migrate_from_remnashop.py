@@ -1,55 +1,24 @@
-"""
-Скрипт одноразовой миграции пользователей из remnashop (PostgreSQL) в tegrabot (PostgreSQL).
-
-Запускать ОДИН РАЗ перед удалением remnashop:
-
-    python migrate_from_remnashop.py
-
-Что переносится из remnashop:
-  users:
-    - telegram_id
-    - username
-    - is_blocked → is_banned
-
-  subscriptions (текущая подписка пользователя):
-    - user_remna_id  → remnawave_uuid
-    - username берём из Remnawave API по uuid
-
-Требования:
-  - Заполненный .env tegrabot (DATABASE_URL, PANEL_API_URL, PANEL_API_KEY)
-  - Доступ к БД remnashop (REMNASHOP_DB_URL в .env)
-    Пример: postgresql://remnashop:PASSWORD@127.0.0.1:5001/remnashop
-"""
-
 import asyncio
-import os
-import sys
-from dotenv import load_dotenv
+import asyncpg
+import httpx
+from config.settings import settings
 
-load_dotenv()
 
-REMNASHOP_DB_URL = os.getenv("REMNASHOP_DB_URL", "")
+REMNASHOP_DB_URL = (
+    "postgresql://remnashop:8d25a07e704851529b2025c13d3989f08fb0c5131c07d314"
+    "@remnashop-db:5432/remnashop"
+)
 
 
 async def migrate():
-    if not REMNASHOP_DB_URL:
-        print("❌ Укажи REMNASHOP_DB_URL в .env")
-        print("   Пример: postgresql://remnashop:PASSWORD@127.0.0.1:5001/remnashop")
-        sys.exit(1)
-
-    from db.database import init_db, create_tables, async_session_maker
+    from db.database import init_db
     from db import dal
-    from config.settings import settings
-    from bot.services.remnawave import get_sdk
+    import db.database as _db
 
-    # ── Читаем пользователей из remnashop ─────────────────────────────────────
-    print(f"🔍 Подключаюсь к remnashop БД...")
+    init_db(settings.DATABASE_URL)
 
-    import asyncpg
-    # asyncpg не понимает +asyncpg в схеме — убираем если есть
-    raw_url = REMNASHOP_DB_URL.replace("postgresql+asyncpg://", "postgresql://")
-
-    conn = await asyncpg.connect(raw_url)
+    print("🔍 Подключаюсь к remnashop БД...")
+    conn = await asyncpg.connect(REMNASHOP_DB_URL, ssl=False)
 
     rows = await conn.fetch("""
         SELECT
@@ -61,52 +30,58 @@ async def migrate():
         LEFT JOIN subscriptions s ON s.id = u.current_subscription_id
         ORDER BY u.id
     """)
-    await conn.close()
 
+    await conn.close()
     print(f"📋 Найдено пользователей в remnashop: {len(rows)}")
 
-    if not rows:
-        print("⚠️  Нет пользователей для миграции.")
-        return
+    print("📡 Загружаю пользователей из панели Remnawave...")
 
-    # ── Инициализируем tegrabot БД ─────────────────────────────────────────────
-    init_db(settings.DATABASE_URL)
-    await create_tables()
+    async with httpx.AsyncClient(verify=True) as client:
+        resp = await client.get(
+            f"{settings.PANEL_API_URL}/api/users?limit=1000",
+            headers={"Authorization": f"Bearer {settings.PANEL_API_KEY}"},
+            timeout=15,
+        )
+        panel_users = resp.json().get("response", {}).get("users", [])
+
+    panel_by_uuid = {u["uuid"]: u for u in panel_users}
+    print(f"📡 В панели найдено: {len(panel_users)} пользователей")
 
     migrated = skipped = errors = 0
-    sdk = get_sdk()
 
-    async with async_session_maker() as session:
+    async with _db.async_session_maker() as session:
         for row in rows:
-            tg_id      = row["telegram_id"]
+            tg_id = row["telegram_id"]
             tg_username = row["username"]
-            is_blocked  = row["is_blocked"]
-            rw_uuid     = row["remnawave_uuid"]  # None если нет подписки
+            is_blocked = row["is_blocked"]
+            rw_uuid = row["remnawave_uuid"]
 
             try:
-                # Пропускаем если уже есть в tegrabot
                 existing = await dal.get_user(session, tg_id)
                 if existing:
-                    print(f"  ⏭  Пропускаю {tg_id} (@{tg_username}) — уже есть")
+                    print(f"  ⏭ Пропускаю {tg_id} (@{tg_username}) — уже есть")
                     skipped += 1
                     continue
 
-                # Получаем username из Remnawave если есть uuid
-                rw_username = None
-                if rw_uuid:
-                    try:
-                        rw_user = await sdk.users.get_user_by_uuid(rw_uuid)
-                        if rw_user:
-                            rw_username = rw_user.username
-                    except Exception as e:
-                        print(f"  ⚠️  Remnawave API недоступен для {tg_id}: {e}")
+                # UUID существует в панели → берём актуальный username
+                rw_username = tg_username
+                if rw_uuid and rw_uuid in panel_by_uuid:
+                    rw_username = panel_by_uuid[rw_uuid]["username"]
 
-                # Fallback: используем tg username
-                if not rw_username:
-                    rw_username = tg_username
+                # 🔒 ЖЁСТКАЯ ЗАЩИТА ОТ ПЕРЕПРИВЯЗКИ UUID
+                existing_by_uuid = await dal.get_user_by_uuid(session, rw_uuid)
+                if existing_by_uuid and existing_by_uuid.telegram_id != tg_id:
+                    print(
+                        f"⚠️ UUID {rw_uuid} уже привязан к "
+                        f"{existing_by_uuid.telegram_id}, пропуск {tg_id}"
+                    )
+                    skipped += 1
+                    continue
 
-                # Записываем в tegrabot БД
+                # создаём пользователя
                 await dal.create_user(session, tg_id, username=tg_username)
+
+                # обновляем данные
                 await dal.update_user(
                     session,
                     tg_id,
@@ -118,6 +93,7 @@ async def migrate():
 
                 status = f"uuid={rw_uuid[:8]}..." if rw_uuid else "без подписки"
                 ban = " [BANNED]" if is_blocked else ""
+
                 print(f"  ✅ {tg_id} (@{tg_username}) → {rw_username} {status}{ban}")
                 migrated += 1
 
@@ -125,19 +101,13 @@ async def migrate():
                 print(f"  ❌ Ошибка для {tg_id}: {e}")
                 errors += 1
 
-    print()
-    print("─" * 50)
-    print(f"✅ Мигрировано:  {migrated}")
-    print(f"⏭  Пропущено:   {skipped}")
-    print(f"❌ Ошибок:       {errors}")
-    print("─" * 50)
+    print("\n" + "─" * 50)
+    print(f"✅ Мигрировано: {migrated}")
+    print(f"⏭ Пропущено:   {skipped}")
+    print(f"❌ Ошибок:      {errors}")
 
     if errors == 0:
         print("\n🎉 Миграция завершена успешно!")
-        print("   Можно останавливать remnashop:")
-        print("   cd /opt/remnashop && docker compose down")
-    else:
-        print("\n⚠️  Были ошибки. Проверь вывод выше перед удалением remnashop.")
 
 
 if __name__ == "__main__":
