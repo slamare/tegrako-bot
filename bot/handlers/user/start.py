@@ -58,6 +58,8 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
             remnawave_uuid=str(rw_user.uuid),
             is_registered=True,
         )
+        # Добавляем в дефолтный сквад если не состоит
+        await remnawave.add_user_to_default_squad(str(rw_user.uuid))
         await message.answer(
             f"✅ Ваш аккаунт найден: <code>{rw_user.username}</code>.\nДобро пожаловать обратно!",
             parse_mode="HTML", reply_markup=main_menu_kb(),
@@ -163,14 +165,68 @@ async def my_subscription(callback: CallbackQuery, session: AsyncSession):
     if not rw:
         await callback.answer("Не удалось получить данные", show_alert=True)
         return
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔗 Открыть подписку", url=rw.subscription_url)],
+        [InlineKeyboardButton(text="🔄 Сбросить ссылку", callback_data="revoke_subscription")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_profile")],
+    ])
+
     await callback.message.edit_text(
         f"📋 <b>Ваша подписка</b>\n\n"
-        f"🔗 Ссылка для подключения:\n<code>{rw.subscription_url}</code>\n\n"
-        f"Скопируйте ссылку и вставьте в VPN-клиент.",
+        f"Нажмите кнопку ниже чтобы открыть ссылку подключения в браузере.\n\n"
+        f"⚠️ <b>Сброс ссылки</b> — сгенерирует новую ссылку. Старая перестанет работать.",
         parse_mode="HTML",
-        reply_markup=subscription_kb(),
+        reply_markup=kb,
     )
 
+
+@router.callback_query(F.data == "revoke_subscription")
+async def revoke_subscription(callback: CallbackQuery, session: AsyncSession):
+    user = await dal.get_user(session, callback.from_user.id)
+    if not user or not user.remnawave_uuid:
+        await callback.answer("Подписка не найдена", show_alert=True)
+        return
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, сбросить", callback_data="revoke_subscription_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="my_subscription")],
+    ])
+    await callback.message.edit_text(
+        "⚠️ <b>Подтвердите сброс ссылки</b>\n\n"
+        "Старая ссылка подписки перестанет работать.\nНужно будет обновить её во всех приложениях.",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data == "revoke_subscription_confirm")
+async def revoke_subscription_confirm(callback: CallbackQuery, session: AsyncSession):
+    user = await dal.get_user(session, callback.from_user.id)
+    if not user or not user.remnawave_uuid:
+        await callback.answer("Подписка не найдена", show_alert=True)
+        return
+
+    rw = await remnawave.revoke_subscription(user.remnawave_uuid)
+    if not rw:
+        await callback.answer("Ошибка при сбросе ссылки", show_alert=True)
+        return
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔗 Открыть новую подписку", url=rw.subscription_url)],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_profile")],
+    ])
+    await callback.message.edit_text(
+        f"✅ <b>Ссылка обновлена!</b>\n\nОбновите подписку во всех приложениях.",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+
+
+# ── Устройства ────────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "my_devices")
 async def my_devices(callback: CallbackQuery, session: AsyncSession):
@@ -178,13 +234,94 @@ async def my_devices(callback: CallbackQuery, session: AsyncSession):
     if not user or not user.remnawave_uuid:
         await callback.answer("Подписка не найдена", show_alert=True)
         return
-    rw = await remnawave.get_subscription_info(user.remnawave_uuid)
-    if not rw or not rw.hwid_device_limit:
-        text = "📱 <b>Мои устройства</b>\n\nДанные недоступны."
-    else:
-        text = f"📱 <b>Мои устройства</b>\n\nЛимит: {rw.hwid_device_limit} устройств."
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=back_kb("back_profile"))
 
+    devices = await remnawave.get_user_devices(user.remnawave_uuid)
+    rw = await remnawave.get_subscription_info(user.remnawave_uuid)
+    limit = rw.hwid_device_limit if rw else 0
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+    if not devices:
+        text = f"📱 <b>Мои устройства</b>\n\nУстройств не зарегистрировано.\nЛимит: {'∞' if not limit else limit} уст."
+        builder = InlineKeyboardBuilder()
+        builder.button(text="◀️ Назад", callback_data="back_profile")
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
+        return
+
+    text = f"📱 <b>Мои устройства</b> ({len(devices)}/{('∞' if not limit else limit)})\n\n"
+    builder = InlineKeyboardBuilder()
+
+    for i, d in enumerate(devices, 1):
+        platform = d.platform or "Неизвестно"
+        model = d.device_model or "—"
+        text += f"{i}. {platform} — {model}\n"
+        builder.button(
+            text=f"🗑 Удалить {i}. {platform}",
+            callback_data=f"delete_device:{d.hwid}"
+        )
+
+    builder.button(text="🗑 Удалить все устройства", callback_data="delete_all_devices")
+    builder.button(text="◀️ Назад", callback_data="back_profile")
+    builder.adjust(1)
+
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
+
+
+@router.callback_query(F.data.startswith("delete_device:"))
+async def delete_device(callback: CallbackQuery, session: AsyncSession):
+    user = await dal.get_user(session, callback.from_user.id)
+    if not user or not user.remnawave_uuid:
+        await callback.answer("Подписка не найдена", show_alert=True)
+        return
+
+    hwid = callback.data.split(":", 1)[1]
+    ok = await remnawave.delete_user_device(user.remnawave_uuid, hwid)
+    if ok:
+        await callback.answer("✅ Устройство удалено")
+        # Обновляем список
+        await my_devices(callback, session)
+    else:
+        await callback.answer("❌ Ошибка при удалении", show_alert=True)
+
+
+@router.callback_query(F.data == "delete_all_devices")
+async def delete_all_devices_confirm(callback: CallbackQuery):
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, удалить все", callback_data="delete_all_devices_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="my_devices")],
+    ])
+    await callback.message.edit_text(
+        "⚠️ <b>Удалить все устройства?</b>\n\nПосле этого нужно будет заново авторизоваться на всех устройствах.",
+        parse_mode="HTML", reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data == "delete_all_devices_confirm")
+async def delete_all_devices(callback: CallbackQuery, session: AsyncSession):
+    user = await dal.get_user(session, callback.from_user.id)
+    if not user or not user.remnawave_uuid:
+        await callback.answer("Подписка не найдена", show_alert=True)
+        return
+
+    ok = await remnawave.delete_all_user_devices(user.remnawave_uuid)
+    if ok:
+        await callback.answer("✅ Все устройства удалены")
+        await callback.message.edit_text(
+            "✅ <b>Все устройства удалены.</b>\n\nПри следующем подключении устройство добавится автоматически.",
+            parse_mode="HTML",
+            reply_markup=__import__('aiogram.types', fromlist=['InlineKeyboardMarkup']).InlineKeyboardMarkup(
+                inline_keyboard=[[__import__('aiogram.types', fromlist=['InlineKeyboardButton']).InlineKeyboardButton(
+                    text="◀️ Назад", callback_data="back_profile"
+                )]]
+            )
+        )
+    else:
+        await callback.answer("❌ Ошибка при удалении", show_alert=True)
+
+
+# ── История платежей ──────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "payment_history")
 async def payment_history(callback: CallbackQuery, session: AsyncSession):

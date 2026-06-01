@@ -4,6 +4,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from bot.states.states import AdminSG
 from bot.keyboards.admin_kb import (
@@ -15,6 +17,7 @@ from bot.keyboards.user_kb import main_menu_kb
 from bot.services import remnawave
 from config.settings import settings
 from db import dal
+from db.models import Payment
 
 router = Router()
 
@@ -51,9 +54,7 @@ async def admin_stats(callback: CallbackQuery, session: AsyncSession):
     try:
         nodes = await remnawave.get_nodes()
         nodes_online = sum(1 for n in nodes if n.is_connected)
-        panel_text = (
-            f"\n\n<b>Ноды:</b> {nodes_online}/{len(nodes)} онлайн"
-        )
+        panel_text = f"\n\n<b>Ноды:</b> {nodes_online}/{len(nodes)} онлайн"
     except Exception:
         panel_text = "\n\n⚠️ Не удалось получить данные панели"
 
@@ -98,13 +99,25 @@ async def admin_pending_payments(callback: CallbackQuery, session: AsyncSession)
 async def approve_payment(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id): return
     payment_id = int(callback.data.split(":")[1])
-    payment = await dal.get_payment(session, payment_id)
+
+    # Загружаем платёж с relationships
+    result = await session.execute(
+        select(Payment).options(selectinload(Payment.user), selectinload(Payment.tariff))
+        .where(Payment.id == payment_id)
+    )
+    payment = result.scalar_one_or_none()
+
     if not payment or payment.status != "pending":
         await callback.answer("Платёж уже обработан", show_alert=True); return
+
     user, tariff = payment.user, payment.tariff
     try:
+        squad_uuid = tariff.squad_uuid if tariff else None
+
         if user.remnawave_uuid:
             await remnawave.extend_subscription(user.remnawave_uuid, tariff.duration_days)
+            # Добавляем в сквад (на случай если не был добавлен)
+            await remnawave.add_user_to_default_squad(user.remnawave_uuid, squad_uuid)
         else:
             rw_user = await remnawave.create_user(
                 username=user.remnawave_username,
@@ -114,6 +127,9 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
                 telegram_id=user.telegram_id,
             )
             await dal.update_user(session, user.telegram_id, remnawave_uuid=str(rw_user.uuid))
+            # Добавляем в сквад
+            await remnawave.add_user_to_default_squad(str(rw_user.uuid), squad_uuid)
+
         await dal.update_payment(session, payment_id, status="approved", approved_by=callback.from_user.id)
         await callback.bot.send_message(
             user.telegram_id,
@@ -134,9 +150,16 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
 async def reject_payment(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id): return
     payment_id = int(callback.data.split(":")[1])
-    payment = await dal.get_payment(session, payment_id)
+
+    result = await session.execute(
+        select(Payment).options(selectinload(Payment.user), selectinload(Payment.tariff))
+        .where(Payment.id == payment_id)
+    )
+    payment = result.scalar_one_or_none()
+
     if not payment or payment.status != "pending":
         await callback.answer("Платёж уже обработан", show_alert=True); return
+
     await dal.update_payment(session, payment_id, status="rejected")
     await callback.bot.send_message(payment.user.telegram_id,
         "❌ <b>Оплата отклонена.</b>\nЕсли считаете ошибкой — обратитесь в поддержку.", parse_mode="HTML")
@@ -232,9 +255,11 @@ async def view_tariff(callback: CallbackQuery, session: AsyncSession):
     t = await dal.get_tariff(session, int(callback.data.split(":")[1]))
     if not t: await callback.answer("Не найден", show_alert=True); return
     traffic = f"{t.traffic_limit_gb} ГБ" if t.traffic_limit_gb else "Безлимит"
+    squad_info = f"\n🔗 Сквад: <code>{t.squad_uuid}</code>" if t.squad_uuid else "\n🔗 Сквад: дефолтный"
     await callback.message.edit_text(
         f"📦 <b>{t.name}</b>\n{t.description or ''}\n⏱ {t.duration_days} дн. | 📊 {traffic} | "
-        f"📱 {t.device_limit or '∞'} уст. | 💰 {int(t.price)} ₽\n{'✅ Активен' if t.is_active else '❌ Неактивен'}",
+        f"📱 {t.device_limit or '∞'} уст. | 💰 {int(t.price)} ₽\n{'✅ Активен' if t.is_active else '❌ Неактивен'}"
+        f"{squad_info}",
         parse_mode="HTML", reply_markup=tariff_manage_kb(t.id, t.is_active))
 
 @router.callback_query(F.data == "admin_create_tariff")
@@ -284,15 +309,31 @@ async def tariff_devices(message: Message, state: FSMContext):
     await message.answer("Введите <b>цену</b> в рублях:", parse_mode="HTML")
 
 @router.message(AdminSG.tariff_price)
-async def tariff_price(message: Message, session: AsyncSession, state: FSMContext):
+async def tariff_price(message: Message, state: FSMContext):
     try:
         price = float(message.text.strip().replace(",",".")); assert price > 0
     except: await message.answer("❌ Введите число > 0:"); return
+    await state.update_data(price=price)
+    await state.set_state(AdminSG.tariff_squad)
+    await message.answer(
+        "Введите <b>UUID сквада</b> для этого тарифа (или '-' для дефолтного):\n\n"
+        f"Дефолтный сквад: <code>{settings.DEFAULT_SQUAD_UUID or 'не задан'}</code>",
+        parse_mode="HTML"
+    )
+
+@router.message(AdminSG.tariff_squad)
+async def tariff_squad(message: Message, session: AsyncSession, state: FSMContext):
+    text = message.text.strip()
+    squad_uuid = None if text == "-" else text
     data = await state.get_data()
-    data["price"] = price
+    data["squad_uuid"] = squad_uuid
     t = await dal.create_tariff(session, **data)
     await state.clear()
-    await message.answer(f"✅ Тариф <b>{t.name}</b> создан! {t.duration_days} дн. | {int(t.price)} ₽", parse_mode="HTML")
+    squad_info = f"сквад: {squad_uuid}" if squad_uuid else "дефолтный сквад"
+    await message.answer(
+        f"✅ Тариф <b>{t.name}</b> создан! {t.duration_days} дн. | {int(t.price)} ₽ | {squad_info}",
+        parse_mode="HTML"
+    )
 
 @router.callback_query(F.data.startswith("toggle_tariff:"))
 async def toggle_tariff(callback: CallbackQuery, session: AsyncSession):
@@ -392,10 +433,15 @@ async def view_user(callback: CallbackQuery, session: AsyncSession):
             rw = await remnawave.get_subscription_info(user.remnawave_uuid)
             if rw: sub_info = f"{rw.status.value} до {rw.expire_at.strftime('%d.%m.%Y')}"
         except: pass
+
+    # Исправленное отображение бана
+    ban_status = "🚫 Да" if user.is_banned else "✅ Нет"
+
     await callback.message.edit_text(
         f"👤 TG: <code>{tg_id}</code> | @{user.username or '—'}\n"
         f"Аккаунт: <code>{user.remnawave_username or '—'}</code>\n"
-        f"Подписка: {sub_info}\nБан: {'🚫' if user.is_banned else '✅'}\n"
+        f"Подписка: {sub_info}\n"
+        f"Забанен: {ban_status}\n"
         f"С: {user.created_at.strftime('%d.%m.%Y')}",
         parse_mode="HTML", reply_markup=user_manage_kb(tg_id, user.is_banned))
 

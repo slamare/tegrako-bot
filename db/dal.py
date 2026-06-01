@@ -1,6 +1,7 @@
 from typing import Optional
 from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from db.models import User, Tariff, Payment, SupportTicket, TicketMessage, BotSettings, Notification
 
 
@@ -58,7 +59,13 @@ async def get_tariff(session: AsyncSession, tariff_id: int) -> Optional[Tariff]:
 
 
 async def create_tariff(session: AsyncSession, **kwargs) -> Tariff:
-    tariff = Tariff(**kwargs)
+    # Убираем лишние ключи которых нет в модели
+    allowed = {
+        "name", "description", "duration_days", "traffic_limit_gb",
+        "device_limit", "price", "is_active", "sort_order", "squad_uuid"
+    }
+    filtered = {k: v for k, v in kwargs.items() if k in allowed}
+    tariff = Tariff(**filtered)
     session.add(tariff)
     await session.commit()
     await session.refresh(tariff)
@@ -101,7 +108,12 @@ async def create_payment(session: AsyncSession, user_id: int, tariff_id: int,
 
 
 async def get_payment(session: AsyncSession, payment_id: int) -> Optional[Payment]:
-    return await session.get(Payment, payment_id)
+    result = await session.execute(
+        select(Payment)
+        .options(selectinload(Payment.user), selectinload(Payment.tariff))
+        .where(Payment.id == payment_id)
+    )
+    return result.scalar_one_or_none()
 
 
 async def update_payment(session: AsyncSession, payment_id: int, **kwargs) -> None:
@@ -111,14 +123,20 @@ async def update_payment(session: AsyncSession, payment_id: int, **kwargs) -> No
 
 async def get_user_payments(session: AsyncSession, user_id: int) -> list[Payment]:
     result = await session.execute(
-        select(Payment).where(Payment.user_id == user_id).order_by(Payment.created_at.desc())
+        select(Payment)
+        .options(selectinload(Payment.tariff))
+        .where(Payment.user_id == user_id)
+        .order_by(Payment.created_at.desc())
     )
     return result.scalars().all()
 
 
 async def get_pending_payments(session: AsyncSession) -> list[Payment]:
     result = await session.execute(
-        select(Payment).where(Payment.status == "pending").order_by(Payment.created_at)
+        select(Payment)
+        .options(selectinload(Payment.user), selectinload(Payment.tariff))
+        .where(Payment.status == "pending")
+        .order_by(Payment.created_at)
     )
     return result.scalars().all()
 
@@ -193,13 +211,21 @@ async def add_ticket_message(session: AsyncSession, ticket_id: int, sender_role:
 
 async def get_open_tickets(session: AsyncSession) -> list[SupportTicket]:
     result = await session.execute(
-        select(SupportTicket).where(SupportTicket.status == "open").order_by(SupportTicket.updated_at)
+        select(SupportTicket)
+        .options(selectinload(SupportTicket.user))
+        .where(SupportTicket.status == "open")
+        .order_by(SupportTicket.updated_at)
     )
     return result.scalars().all()
 
 
 async def get_ticket_by_id(session: AsyncSession, ticket_id: int) -> Optional[SupportTicket]:
-    return await session.get(SupportTicket, ticket_id)
+    result = await session.execute(
+        select(SupportTicket)
+        .options(selectinload(SupportTicket.user), selectinload(SupportTicket.messages))
+        .where(SupportTicket.id == ticket_id)
+    )
+    return result.scalar_one_or_none()
 
 
 # ── Bot settings ───────────────────────────────────────────────────────────

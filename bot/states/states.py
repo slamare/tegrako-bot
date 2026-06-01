@@ -2,7 +2,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class RegistrationSG(StatesGroup):
-    choose_username = State()   # ввод имени если нет @username
+    choose_username = State()
 
 
 class PaymentSG(StatesGroup):
@@ -12,12 +12,12 @@ class PaymentSG(StatesGroup):
 
 
 class SupportSG(StatesGroup):
-    waiting_message = State()   # пользователь пишет в поддержку
+    waiting_message = State()
 
 
 class AdminSG(StatesGroup):
     # Поддержка
-    replying_ticket = State()   # admin отвечает на тикет (хранит ticket_id в data)
+    replying_ticket = State()
 
     # Тарифы
     tariff_name = State()
@@ -26,9 +26,10 @@ class AdminSG(StatesGroup):
     tariff_traffic = State()
     tariff_devices = State()
     tariff_price = State()
+    tariff_squad = State()  # новое — UUID сквада
 
     # Рассылка
     broadcast_text = State()
 
-    # Тех. работы — текст уведомления
+    # Тех. работы
     maintenance_text = State()

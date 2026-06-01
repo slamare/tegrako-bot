@@ -17,9 +17,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
     username: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    # имя пользователя в Remnawave (tg_username или введённое вручную)
     remnawave_username: Mapped[Optional[str]] = mapped_column(String(64), unique=True, nullable=True)
-    # uuid пользователя в Remnawave после создания
     remnawave_uuid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     is_registered: Mapped[bool] = mapped_column(Boolean, default=False)
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -37,13 +35,13 @@ class Tariff(Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     duration_days: Mapped[int] = mapped_column(Integer, nullable=False)
-    # 0 = безлимит
     traffic_limit_gb: Mapped[int] = mapped_column(Integer, default=0)
-    # 0 = безлимит
     device_limit: Mapped[int] = mapped_column(Integer, default=0)
     price: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # UUID сквада в Remnawave (если None — используется DEFAULT_SQUAD_UUID из settings)
+    squad_uuid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     payments: Mapped[list["Payment"]] = relationship(back_populates="tariff", lazy="selectin")
@@ -56,13 +54,9 @@ class Payment(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     tariff_id: Mapped[int] = mapped_column(ForeignKey("tariffs.id"), nullable=False)
     amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    # pending / approved / rejected
     status: Mapped[str] = mapped_column(String(16), default="pending")
-    # реквизит через который платил (card / sbp / crypto)
     payment_method: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    # file_id скриншота в Telegram (не храним файл, только ссылку)
     screenshot_file_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
-    # id сообщения в админ-чате с карточкой апрува
     admin_message_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     approved_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -77,7 +71,6 @@ class SupportTicket(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    # open / closed
     status: Mapped[str] = mapped_column(String(16), default="open")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -91,14 +84,11 @@ class TicketMessage(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ticket_id: Mapped[int] = mapped_column(ForeignKey("support_tickets.id"), nullable=False, index=True)
-    # user / admin
     sender_role: Mapped[str] = mapped_column(String(8), nullable=False)
     sender_tg_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    # file_id если прислали медиа
     media_file_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     media_type: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
-    # id сообщения в боте (для форварда)
     tg_message_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -106,7 +96,6 @@ class TicketMessage(Base):
 
 
 class BotSettings(Base):
-    """Глобальные настройки бота которые меняются через админку"""
     __tablename__ = "bot_settings"
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -115,13 +104,10 @@ class BotSettings(Base):
 
 
 class Notification(Base):
-    """Лог отправленных уведомлений — чтобы не слать дважды"""
     __tablename__ = "notifications"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    # subscription_activated / expiring_soon / expired / maintenance
     type: Mapped[str] = mapped_column(String(32), nullable=False)
-    # доп. данные (например за сколько дней до истечения)
     meta: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     sent_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

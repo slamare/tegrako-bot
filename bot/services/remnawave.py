@@ -3,7 +3,7 @@
 """
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 from config.settings import settings
@@ -45,6 +45,22 @@ class NodeInfo:
     name: str
     address: str
     is_connected: bool
+
+@dataclass
+class HwidDevice:
+    hwid: str
+    user_uuid: str
+    platform: Optional[str]
+    os_version: Optional[str]
+    device_model: Optional[str]
+    user_agent: Optional[str]
+    created_at: str
+
+@dataclass
+class SquadInfo:
+    uuid: str
+    name: str
+    members_count: int
 
 
 def _parse_user(u: dict) -> UserInfo:
@@ -144,6 +160,127 @@ async def extend_subscription(uuid: str, duration_days: int) -> UserInfo:
 
 async def get_subscription_info(uuid: str) -> Optional[UserInfo]:
     return await get_user_by_uuid(uuid)
+
+
+async def revoke_subscription(uuid: str) -> Optional[UserInfo]:
+    """Сброс ссылки подписки — генерирует новый shortUuid."""
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.post(
+                _url(f"/users/{uuid}/actions/revoke"),
+                headers=_headers(),
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            u = data.get("response", data)
+            return _parse_user(u)
+    except Exception:
+        return None
+
+
+# ── Squads ─────────────────────────────────────────────────────────────────
+
+async def get_internal_squads() -> list[SquadInfo]:
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.get(_url("/internal-squads"), headers=_headers(), timeout=10)
+            data = resp.json()
+            squads = data.get("response", {}).get("internalSquads", [])
+            return [
+                SquadInfo(
+                    uuid=s["uuid"],
+                    name=s["name"],
+                    members_count=s.get("info", {}).get("membersCount", 0),
+                )
+                for s in squads
+            ]
+    except Exception:
+        return []
+
+
+async def add_user_to_squad(user_uuid: str, squad_uuid: str) -> bool:
+    """Добавить пользователя во internal squad."""
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.post(
+                _url(f"/internal-squads/{squad_uuid}/bulk-actions/add-users"),
+                headers=_headers(),
+                json={"userUuids": [user_uuid]},
+                timeout=10,
+            )
+            data = resp.json()
+            return data.get("response", {}).get("eventSent", False)
+    except Exception:
+        return False
+
+
+async def add_user_to_default_squad(user_uuid: str, tariff_squad_uuid: Optional[str] = None) -> bool:
+    """Добавить пользователя в сквад тарифа или дефолтный."""
+    squad_uuid = tariff_squad_uuid or settings.DEFAULT_SQUAD_UUID
+    if not squad_uuid:
+        return False
+    return await add_user_to_squad(user_uuid, squad_uuid)
+
+
+# ── HWID Devices ───────────────────────────────────────────────────────────
+
+async def get_user_devices(user_uuid: str) -> list[HwidDevice]:
+    """Получить список устройств пользователя."""
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.get(
+                _url(f"/hwid/devices/{user_uuid}"),
+                headers=_headers(),
+                timeout=10,
+            )
+            data = resp.json()
+            devices = data.get("response", {}).get("devices", [])
+            return [
+                HwidDevice(
+                    hwid=d["hwid"],
+                    user_uuid=d["userUuid"],
+                    platform=d.get("platform"),
+                    os_version=d.get("osVersion"),
+                    device_model=d.get("deviceModel"),
+                    user_agent=d.get("userAgent"),
+                    created_at=d.get("createdAt", ""),
+                )
+                for d in devices
+            ]
+    except Exception:
+        return []
+
+
+async def delete_user_device(user_uuid: str, hwid: str) -> bool:
+    """Удалить одно устройство пользователя."""
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.post(
+                _url("/hwid/devices/delete"),
+                headers=_headers(),
+                json={"userUuid": user_uuid, "hwid": hwid},
+                timeout=10,
+            )
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
+async def delete_all_user_devices(user_uuid: str) -> bool:
+    """Удалить все устройства пользователя."""
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.post(
+                _url("/hwid/devices/delete-all"),
+                headers=_headers(),
+                json={"userUuid": user_uuid},
+                timeout=10,
+            )
+            return resp.status_code == 200
+    except Exception:
+        return False
 
 
 # ── Nodes ──────────────────────────────────────────────────────────────────
