@@ -51,6 +51,7 @@ async def admin_stats(callback: CallbackQuery, session: AsyncSession):
     users = await dal.count_users(session)
     revenue = await dal.get_revenue_stats(session)
     pending = await dal.get_pending_payments(session)
+    ref_days = await dal.get_setting(session, "referral_days", "0")
     try:
         nodes = await remnawave.get_nodes()
         nodes_online = sum(1 for n in nodes if n.is_connected)
@@ -65,11 +66,40 @@ async def admin_stats(callback: CallbackQuery, session: AsyncSession):
         f"<b>Выручка:</b>\n"
         f"📅 Неделя: {revenue['weekly']:.0f} ₽\n"
         f"📆 Месяц: {revenue['monthly']:.0f} ₽\n"
-        f"💰 Всего: {revenue['total']:.0f} ₽"
+        f"💰 Всего: {revenue['total']:.0f} ₽\n\n"
+        f"🎁 Бонус за реферала: <b>{ref_days} дн.</b>"
         f"{panel_text}"
     )
-    await callback.message.edit_text(text, parse_mode="HTML",
-                                     reply_markup=InlineKeyboardMarkup(inline_keyboard=back_btn()))
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Изменить бонус за реферала", callback_data="admin_set_ref_days")],
+        back_btn()[0],
+    ])
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(F.data == "admin_set_ref_days")
+async def admin_set_ref_days(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id): return
+    await state.set_state(AdminSG.set_referral_days)
+    await callback.message.answer(
+        "Введите количество дней, которые получает реферер за каждого оплатившего друга.\n\n"
+        "Введите <b>0</b> чтобы отключить бонус.",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.message(AdminSG.set_referral_days)
+async def save_referral_days(message: Message, session: AsyncSession, state: FSMContext):
+    if not is_admin(message.from_user.id): return
+    try:
+        days = int(message.text.strip())
+        assert days >= 0
+    except:
+        await message.answer("❌ Введите целое число >= 0:")
+        return
+    await dal.set_setting(session, "referral_days", str(days))
+    await state.clear()
+    await message.answer(f"✅ Бонус за реферала установлен: <b>{days} дн.</b>", parse_mode="HTML")
 
 # ── Платежи ───────────────────────────────────────────────────────────────────
 
@@ -128,6 +158,25 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
             await remnawave.add_user_to_default_squad(str(rw_user.uuid), squad_uuid)
 
         await dal.update_payment(session, payment_id, status="approved", approved_by=callback.from_user.id)
+
+        # ── Реферальный бонус ──────────────────────────────────────────────
+        ref_days = int(await dal.get_setting(session, "referral_days", "0"))
+        if ref_days > 0 and user.referred_by:
+            referrer = await dal.get_user(session, user.referred_by)
+            if referrer and referrer.remnawave_uuid:
+                try:
+                    await remnawave.extend_subscription(referrer.remnawave_uuid, ref_days)
+                    await callback.bot.send_message(
+                        referrer.telegram_id,
+                        f"🎁 <b>Реферальный бонус!</b>\n\n"
+                        f"Ваш друг @{user.username or user.telegram_id} оплатил подписку.\n"
+                        f"Вам начислено <b>+{ref_days} дней</b>.",
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+        # ──────────────────────────────────────────────────────────────────
+
         await callback.bot.send_message(
             user.telegram_id,
             f"✅ <b>Оплата подтверждена!</b>\n\nТариф: {tariff.name} ({tariff.duration_days} дн.)\n"
@@ -463,12 +512,19 @@ async def view_user(callback: CallbackQuery, session: AsyncSession):
         except: pass
 
     ban_status = "🚫 Да" if user.is_banned else "✅ Нет"
+    ref_count = await dal.count_referrals(session, tg_id)
+    ref_paid = await dal.get_referrals_with_payment(session, tg_id)
+    referrer_info = ""
+    if user.referred_by:
+        referrer_info = f"\nПривёл: <code>{user.referred_by}</code>"
 
     await callback.message.edit_text(
         f"👤 TG: <code>{tg_id}</code> | @{user.username or '—'}\n"
         f"Аккаунт: <code>{user.remnawave_username or '—'}</code>\n"
         f"Подписка: {sub_info}\n"
         f"Забанен: {ban_status}\n"
+        f"👥 Рефералов: {ref_count} (оплатили: {len(ref_paid)})"
+        f"{referrer_info}\n"
         f"С: {user.created_at.strftime('%d.%m.%Y')}",
         parse_mode="HTML", reply_markup=user_manage_kb(tg_id, user.is_banned))
 

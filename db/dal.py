@@ -22,8 +22,9 @@ async def get_user_by_uuid(session: AsyncSession, uuid: str) -> Optional[User]:
     return result.scalar_one_or_none()
 
 
-async def create_user(session: AsyncSession, telegram_id: int, username: Optional[str] = None) -> User:
-    user = User(telegram_id=telegram_id, username=username)
+async def create_user(session: AsyncSession, telegram_id: int, username: Optional[str] = None,
+                      referred_by: Optional[int] = None) -> User:
+    user = User(telegram_id=telegram_id, username=username, referred_by=referred_by)
     session.add(user)
     await session.commit()
     await session.refresh(user)
@@ -48,6 +49,26 @@ async def count_users(session: AsyncSession) -> dict:
     registered = await session.scalar(select(func.count(User.id)).where(User.is_registered == True))
     banned = await session.scalar(select(func.count(User.id)).where(User.is_banned == True))
     return {"total": total, "registered": registered, "banned": banned}
+
+
+async def count_referrals(session: AsyncSession, telegram_id: int) -> int:
+    """Количество пользователей, пришедших по ссылке этого юзера."""
+    result = await session.scalar(
+        select(func.count(User.id)).where(User.referred_by == telegram_id)
+    )
+    return result or 0
+
+
+async def get_referrals_with_payment(session: AsyncSession, telegram_id: int) -> list[User]:
+    """Рефералы у которых есть хотя бы один одобренный платёж."""
+    result = await session.execute(
+        select(User)
+        .where(User.referred_by == telegram_id)
+        .join(Payment, Payment.user_id == User.id)
+        .where(Payment.status == "approved")
+        .distinct()
+    )
+    return result.scalars().all()
 
 
 # ── Tariffs ────────────────────────────────────────────────────────────────
@@ -170,7 +191,6 @@ async def get_revenue_stats(session: AsyncSession) -> dict:
 
 async def has_used_trial(session: AsyncSession, user_id: int) -> bool:
     """Возвращает True если пользователь уже использовал триал или имеет подписку."""
-    # Есть одобренный платёж по триальному тарифу
     result = await session.execute(
         select(Payment)
         .join(Tariff, Payment.tariff_id == Tariff.id)
@@ -182,7 +202,6 @@ async def has_used_trial(session: AsyncSession, user_id: int) -> bool:
     )
     if result.scalar_one_or_none():
         return True
-    # Есть remnawave_uuid — значит подписка уже создавалась
     result = await session.execute(
         select(User).where(User.id == user_id, User.remnawave_uuid.is_not(None))
     )

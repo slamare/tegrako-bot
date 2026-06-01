@@ -1,7 +1,7 @@
 from aiogram import Router, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy.ext.asyncio import AsyncSession
 import re
 
@@ -24,9 +24,24 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
         await message.answer("🔧 Ведутся технические работы. Пожалуйста, попробуйте позже.")
         return
 
+    # Парсим реферальный параметр: /start ref_123456
+    referred_by = None
+    args = message.text.split(maxsplit=1)
+    if len(args) > 1 and args[1].startswith("ref_"):
+        try:
+            ref_id = int(args[1][4:])
+            if ref_id != tg_id:
+                referred_by = ref_id
+        except ValueError:
+            pass
+
     user = await dal.get_user(session, tg_id)
     if not user:
-        user = await dal.create_user(session, tg_id, username=message.from_user.username)
+        user = await dal.create_user(session, tg_id, username=message.from_user.username,
+                                     referred_by=referred_by)
+    elif referred_by and not user.referred_by:
+        # Записываем реферера если ещё не был установлен
+        await dal.update_user(session, tg_id, referred_by=referred_by)
 
     if message.from_user.username and user.username != message.from_user.username:
         await dal.update_user(session, tg_id, username=message.from_user.username)
@@ -38,9 +53,8 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
     )
     if settings.WELCOME_IMAGE_URL:
         try:
-            from aiogram.types import FSInputFile
             img = settings.WELCOME_IMAGE_URL
-            photo = img if img.startswith("http") else FSInputFile(img)
+            photo = img if img.startswith("http") else __import__('aiogram.types', fromlist=['FSInputFile']).FSInputFile(img)
             await message.answer_photo(photo, caption=welcome_text, parse_mode="HTML", reply_markup=main_menu_kb())
         except Exception:
             await message.answer(welcome_text, parse_mode="HTML", reply_markup=main_menu_kb())
@@ -58,7 +72,6 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
             remnawave_uuid=str(rw_user.uuid),
             is_registered=True,
         )
-        # Добавляем в дефолтный сквад если не состоит
         await remnawave.add_user_to_default_squad(str(rw_user.uuid))
         await message.answer(
             f"✅ Ваш аккаунт найден: <code>{rw_user.username}</code>.\nДобро пожаловать обратно!",
@@ -145,11 +158,16 @@ async def profile(message: Message, session: AsyncSession):
         except Exception:
             sub_info = "\n\n⚠️ Не удалось получить данные подписки"
 
+    ref_count = await dal.count_referrals(session, tg_id)
+    ref_paid = await dal.get_referrals_with_payment(session, tg_id)
+    ref_info = f"\n\n👥 Рефералов: {ref_count} (оплатили: {len(ref_paid)})"
+
     await message.answer(
         f"👤 <b>Личный кабинет</b>\n\n"
         f"🆔 ID: <code>{tg_id}</code>\n"
         f"👤 Аккаунт: <code>{user.remnawave_username}</code>"
-        f"{sub_info}",
+        f"{sub_info}"
+        f"{ref_info}",
         parse_mode="HTML",
         reply_markup=profile_kb(has_sub),
     )
@@ -166,7 +184,6 @@ async def my_subscription(callback: CallbackQuery, session: AsyncSession):
         await callback.answer("Не удалось получить данные", show_alert=True)
         return
 
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔗 Открыть подписку", url=rw.subscription_url)],
         [InlineKeyboardButton(text="🔄 Сбросить ссылку", callback_data="revoke_subscription")],
@@ -189,7 +206,6 @@ async def revoke_subscription(callback: CallbackQuery, session: AsyncSession):
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да, сбросить", callback_data="revoke_subscription_confirm")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="my_subscription")],
@@ -214,7 +230,6 @@ async def revoke_subscription_confirm(callback: CallbackQuery, session: AsyncSes
         await callback.answer("Ошибка при сбросе ссылки", show_alert=True)
         return
 
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔗 Открыть новую подписку", url=rw.subscription_url)],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="back_profile")],
@@ -239,7 +254,6 @@ async def my_devices(callback: CallbackQuery, session: AsyncSession):
     rw = await remnawave.get_subscription_info(user.remnawave_uuid)
     limit = rw.hwid_device_limit if rw else 0
 
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     from aiogram.utils.keyboard import InlineKeyboardBuilder
 
     if not devices:
@@ -279,7 +293,6 @@ async def delete_device(callback: CallbackQuery, session: AsyncSession):
     ok = await remnawave.delete_user_device(user.remnawave_uuid, hwid)
     if ok:
         await callback.answer("✅ Устройство удалено")
-        # Обновляем список
         await my_devices(callback, session)
     else:
         await callback.answer("❌ Ошибка при удалении", show_alert=True)
@@ -287,7 +300,6 @@ async def delete_device(callback: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data == "delete_all_devices")
 async def delete_all_devices_confirm(callback: CallbackQuery):
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да, удалить все", callback_data="delete_all_devices_confirm")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="my_devices")],
@@ -311,11 +323,9 @@ async def delete_all_devices(callback: CallbackQuery, session: AsyncSession):
         await callback.message.edit_text(
             "✅ <b>Все устройства удалены.</b>\n\nПри следующем подключении устройство добавится автоматически.",
             parse_mode="HTML",
-            reply_markup=__import__('aiogram.types', fromlist=['InlineKeyboardMarkup']).InlineKeyboardMarkup(
-                inline_keyboard=[[__import__('aiogram.types', fromlist=['InlineKeyboardButton']).InlineKeyboardButton(
-                    text="◀️ Назад", callback_data="back_profile"
-                )]]
-            )
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="back_profile")]
+            ])
         )
     else:
         await callback.answer("❌ Ошибка при удалении", show_alert=True)
@@ -350,6 +360,54 @@ async def payment_history(callback: CallbackQuery, session: AsyncSession):
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=back_kb("back_profile"))
 
 
+# ── Реферальная система ───────────────────────────────────────────────────────
+
+@router.message(F.text == "👥 Пригласить друга")
+async def invite_friend(message: Message, session: AsyncSession):
+    await _send_invite(message, session)
+
+
+@router.message(Command("invite"))
+async def invite_command(message: Message, session: AsyncSession):
+    await _send_invite(message, session)
+
+
+async def _send_invite(message: Message, session: AsyncSession):
+    tg_id = message.from_user.id
+    bot_info = await message.bot.get_me()
+    link = f"https://t.me/{bot_info.username}?start=ref_{tg_id}"
+
+    ref_days = int(await dal.get_setting(session, "referral_days", "0"))
+    ref_count = await dal.count_referrals(session, tg_id)
+    ref_paid = await dal.get_referrals_with_payment(session, tg_id)
+
+    bonus_text = f"\n🎁 За каждого оплатившего друга вы получаете <b>+{ref_days} дней</b>." if ref_days else ""
+    stats_text = f"\n\n📊 Приглашено: {ref_count} | Оплатили: {len(ref_paid)}"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Присоединиться", url=link)],
+    ])
+
+    banner_text = (
+        f"🚀 Привет! Хочешь стабильный и быстрый VPN?\n\n"
+        f"{settings.BOT_NAME} — поможет тебе с этим!\n\n"
+        f"📌 ЖМИ КНОПКУ И ПОПРОБУЙ БЕСПЛАТНО!"
+    )
+
+    # Отправляем баннер
+    await message.answer(banner_text, reply_markup=kb)
+
+    # Отдельным сообщением — личная ссылка со статистикой
+    await message.answer(
+        f"👥 <b>Ваша реферальная ссылка:</b>\n\n"
+        f'<a href="{link}">{link}</a>'
+        f"{bonus_text}"
+        f"{stats_text}",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
 # ── Навигация ─────────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "back_main")
@@ -367,12 +425,3 @@ async def cancel_action(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.delete()
     await callback.answer("Отменено")
-
-@router.message(F.text == "👥 Пригласить друга")
-async def invite_friend(message: Message):
-    bot_info = await message.bot.get_me()
-    link = f"https://t.me/{bot_info.username}?start=ref_{message.from_user.id}"
-    await message.answer(
-        f"👥 <b>Пригласите друга!</b>\n\nПоделитесь ссылкой:\n<code>{link}</code>",
-        parse_mode="HTML",
-    )

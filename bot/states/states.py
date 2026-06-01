@@ -34,3 +34,6 @@ class AdminSG(StatesGroup):
 
     # Тех. работы
     maintenance_text = State()
+
+    # Реферальная система
+    set_referral_days = State()

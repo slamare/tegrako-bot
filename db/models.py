@@ -21,6 +21,7 @@ class User(Base):
     remnawave_uuid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     is_registered: Mapped[bool] = mapped_column(Boolean, default=False)
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
+    referred_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     last_seen: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -41,7 +42,6 @@ class Tariff(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_trial: Mapped[bool] = mapped_column(Boolean, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
-    # UUID сквада в Remnawave (если None — используется DEFAULT_SQUAD_UUID из settings)
     squad_uuid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
