@@ -26,7 +26,8 @@ class AdminSG(StatesGroup):
     tariff_traffic = State()
     tariff_devices = State()
     tariff_price = State()
-    tariff_squad = State()  # новое — UUID сквада
+    tariff_squad = State()
+    tariff_trial = State()
 
     # Рассылка
     broadcast_text = State()

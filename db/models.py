@@ -39,6 +39,7 @@ class Tariff(Base):
     device_limit: Mapped[int] = mapped_column(Integer, default=0)
     price: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_trial: Mapped[bool] = mapped_column(Boolean, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     # UUID сквада в Remnawave (если None — используется DEFAULT_SQUAD_UUID из settings)
     squad_uuid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)

@@ -17,6 +17,11 @@ async def get_user_by_remnawave_username(session: AsyncSession, username: str) -
     return result.scalar_one_or_none()
 
 
+async def get_user_by_uuid(session: AsyncSession, uuid: str) -> Optional[User]:
+    result = await session.execute(select(User).where(User.remnawave_uuid == uuid))
+    return result.scalar_one_or_none()
+
+
 async def create_user(session: AsyncSession, telegram_id: int, username: Optional[str] = None) -> User:
     user = User(telegram_id=telegram_id, username=username)
     session.add(user)
@@ -59,10 +64,9 @@ async def get_tariff(session: AsyncSession, tariff_id: int) -> Optional[Tariff]:
 
 
 async def create_tariff(session: AsyncSession, **kwargs) -> Tariff:
-    # Убираем лишние ключи которых нет в модели
     allowed = {
         "name", "description", "duration_days", "traffic_limit_gb",
-        "device_limit", "price", "is_active", "sort_order", "squad_uuid"
+        "device_limit", "price", "is_active", "is_trial", "sort_order", "squad_uuid"
     }
     filtered = {k: v for k, v in kwargs.items() if k in allowed}
     tariff = Tariff(**filtered)
@@ -162,6 +166,27 @@ async def get_revenue_stats(session: AsyncSession) -> dict:
     ) or 0
 
     return {"total": float(total), "monthly": float(monthly), "weekly": float(weekly)}
+
+
+async def has_used_trial(session: AsyncSession, user_id: int) -> bool:
+    """Возвращает True если пользователь уже использовал триал или имеет подписку."""
+    # Есть одобренный платёж по триальному тарифу
+    result = await session.execute(
+        select(Payment)
+        .join(Tariff, Payment.tariff_id == Tariff.id)
+        .where(
+            Payment.user_id == user_id,
+            Payment.status == "approved",
+            Tariff.is_trial == True,
+        )
+    )
+    if result.scalar_one_or_none():
+        return True
+    # Есть remnawave_uuid — значит подписка уже создавалась
+    result = await session.execute(
+        select(User).where(User.id == user_id, User.remnawave_uuid.is_not(None))
+    )
+    return result.scalar_one_or_none() is not None
 
 
 # ── Support tickets ────────────────────────────────────────────────────────

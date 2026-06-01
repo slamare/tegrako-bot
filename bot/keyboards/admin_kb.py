@@ -35,17 +35,20 @@ def tariff_list_kb(tariffs: list[Tariff]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for t in tariffs:
         status = "✅" if t.is_active else "❌"
-        builder.button(text=f"{status} {t.name} — {int(t.price)} ₽", callback_data=f"admin_tariff:{t.id}")
+        trial = " 🎁" if t.is_trial else ""
+        builder.button(text=f"{status} {t.name} — {int(t.price)} ₽{trial}", callback_data=f"admin_tariff:{t.id}")
     builder.button(text="➕ Создать тариф", callback_data="admin_create_tariff")
     builder.button(text="◀️ Назад", callback_data="admin_menu")
     builder.adjust(1)
     return builder.as_markup()
 
 
-def tariff_manage_kb(tariff_id: int, is_active: bool) -> InlineKeyboardMarkup:
-    toggle = "❌ Деактивировать" if is_active else "✅ Активировать"
+def tariff_manage_kb(tariff_id: int, is_active: bool, is_trial: bool) -> InlineKeyboardMarkup:
+    toggle_active = "❌ Деактивировать" if is_active else "✅ Активировать"
+    toggle_trial = "🔓 Убрать триал" if is_trial else "🎁 Сделать триальным"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=toggle, callback_data=f"toggle_tariff:{tariff_id}")],
+        [InlineKeyboardButton(text=toggle_active, callback_data=f"toggle_tariff:{tariff_id}")],
+        [InlineKeyboardButton(text=toggle_trial, callback_data=f"toggle_trial:{tariff_id}")],
         [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_tariff:{tariff_id}")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_tariffs")],
     ])

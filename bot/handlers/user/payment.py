@@ -40,6 +40,15 @@ async def choose_tariff(callback: CallbackQuery, session: AsyncSession, state: F
         await callback.answer("Тариф недоступен", show_alert=True)
         return
 
+    if tariff.is_trial:
+        user = await dal.get_user(session, callback.from_user.id)
+        if user and await dal.has_used_trial(session, user.id):
+            await callback.answer(
+                "🚫 Пробный тариф доступен только новым пользователям без подписки.",
+                show_alert=True,
+            )
+            return
+
     await state.update_data(tariff_id=tariff_id, amount=float(tariff.price))
 
     requisites = settings.payment_requisites

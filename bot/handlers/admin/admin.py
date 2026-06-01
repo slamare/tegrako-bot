@@ -100,7 +100,6 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id): return
     payment_id = int(callback.data.split(":")[1])
 
-    # Загружаем платёж с relationships
     result = await session.execute(
         select(Payment).options(selectinload(Payment.user), selectinload(Payment.tariff))
         .where(Payment.id == payment_id)
@@ -116,7 +115,6 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
 
         if user.remnawave_uuid:
             await remnawave.extend_subscription(user.remnawave_uuid, tariff.duration_days)
-            # Добавляем в сквад (на случай если не был добавлен)
             await remnawave.add_user_to_default_squad(user.remnawave_uuid, squad_uuid)
         else:
             rw_user = await remnawave.create_user(
@@ -127,7 +125,6 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
                 telegram_id=user.telegram_id,
             )
             await dal.update_user(session, user.telegram_id, remnawave_uuid=str(rw_user.uuid))
-            # Добавляем в сквад
             await remnawave.add_user_to_default_squad(str(rw_user.uuid), squad_uuid)
 
         await dal.update_payment(session, payment_id, status="approved", approved_by=callback.from_user.id)
@@ -256,11 +253,12 @@ async def view_tariff(callback: CallbackQuery, session: AsyncSession):
     if not t: await callback.answer("Не найден", show_alert=True); return
     traffic = f"{t.traffic_limit_gb} ГБ" if t.traffic_limit_gb else "Безлимит"
     squad_info = f"\n🔗 Сквад: <code>{t.squad_uuid}</code>" if t.squad_uuid else "\n🔗 Сквад: дефолтный"
+    trial_info = "\n🎁 Тип: <b>Триальный</b> (только для новых)" if t.is_trial else "\n📦 Тип: Обычный"
     await callback.message.edit_text(
         f"📦 <b>{t.name}</b>\n{t.description or ''}\n⏱ {t.duration_days} дн. | 📊 {traffic} | "
         f"📱 {t.device_limit or '∞'} уст. | 💰 {int(t.price)} ₽\n{'✅ Активен' if t.is_active else '❌ Неактивен'}"
-        f"{squad_info}",
-        parse_mode="HTML", reply_markup=tariff_manage_kb(t.id, t.is_active))
+        f"{squad_info}{trial_info}",
+        parse_mode="HTML", reply_markup=tariff_manage_kb(t.id, t.is_active, t.is_trial))
 
 @router.callback_query(F.data == "admin_create_tariff")
 async def create_tariff_start(callback: CallbackQuery, state: FSMContext):
@@ -322,16 +320,29 @@ async def tariff_price(message: Message, state: FSMContext):
     )
 
 @router.message(AdminSG.tariff_squad)
-async def tariff_squad(message: Message, session: AsyncSession, state: FSMContext):
+async def tariff_squad(message: Message, state: FSMContext):
     text = message.text.strip()
     squad_uuid = None if text == "-" else text
+    await state.update_data(squad_uuid=squad_uuid)
+    await state.set_state(AdminSG.tariff_trial)
+    await message.answer(
+        "Это <b>пробный (Trial) тариф</b>?\n\n"
+        "Пробный тариф доступен только пользователям без подписки.\n\n"
+        "Отправьте <b>да</b> или <b>нет</b>.",
+        parse_mode="HTML"
+    )
+
+@router.message(AdminSG.tariff_trial)
+async def tariff_trial(message: Message, session: AsyncSession, state: FSMContext):
+    is_trial = message.text.strip().lower() in ("да", "yes", "1", "true", "+")
     data = await state.get_data()
-    data["squad_uuid"] = squad_uuid
+    data["is_trial"] = is_trial
     t = await dal.create_tariff(session, **data)
     await state.clear()
-    squad_info = f"сквад: {squad_uuid}" if squad_uuid else "дефолтный сквад"
+    squad_info = f"сквад: {data.get('squad_uuid')}" if data.get("squad_uuid") else "дефолтный сквад"
+    trial_info = " | 🎁 Триальный" if is_trial else ""
     await message.answer(
-        f"✅ Тариф <b>{t.name}</b> создан! {t.duration_days} дн. | {int(t.price)} ₽ | {squad_info}",
+        f"✅ Тариф <b>{t.name}</b> создан! {t.duration_days} дн. | {int(t.price)} ₽ | {squad_info}{trial_info}",
         parse_mode="HTML"
     )
 
@@ -343,7 +354,24 @@ async def toggle_tariff(callback: CallbackQuery, session: AsyncSession):
     if not t: await callback.answer("Не найден", show_alert=True); return
     await dal.update_tariff(session, tariff_id, is_active=not t.is_active)
     await callback.answer("Статус обновлён")
-    await callback.message.edit_reply_markup(reply_markup=tariff_manage_kb(tariff_id, not t.is_active))
+    t_updated = await dal.get_tariff(session, tariff_id)
+    await callback.message.edit_reply_markup(
+        reply_markup=tariff_manage_kb(tariff_id, t_updated.is_active, t_updated.is_trial)
+    )
+
+@router.callback_query(F.data.startswith("toggle_trial:"))
+async def toggle_trial(callback: CallbackQuery, session: AsyncSession):
+    if not is_admin(callback.from_user.id): return
+    tariff_id = int(callback.data.split(":")[1])
+    t = await dal.get_tariff(session, tariff_id)
+    if not t: await callback.answer("Не найден", show_alert=True); return
+    await dal.update_tariff(session, tariff_id, is_trial=not t.is_trial)
+    label = "🎁 Тариф помечен как триальный" if not t.is_trial else "🔓 Триал снят"
+    await callback.answer(label, show_alert=True)
+    t_updated = await dal.get_tariff(session, tariff_id)
+    await callback.message.edit_reply_markup(
+        reply_markup=tariff_manage_kb(tariff_id, t_updated.is_active, t_updated.is_trial)
+    )
 
 @router.callback_query(F.data.startswith("delete_tariff:"))
 async def delete_tariff(callback: CallbackQuery, session: AsyncSession):
@@ -434,7 +462,6 @@ async def view_user(callback: CallbackQuery, session: AsyncSession):
             if rw: sub_info = f"{rw.status.value} до {rw.expire_at.strftime('%d.%m.%Y')}"
         except: pass
 
-    # Исправленное отображение бана
     ban_status = "🚫 Да" if user.is_banned else "✅ Нет"
 
     await callback.message.edit_text(
