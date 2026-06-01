@@ -79,7 +79,10 @@ async def choose_requisite(callback: CallbackQuery, session: AsyncSession, state
     await state.update_data(payment_method=req["label"])
 
     details = req["details"]
-    is_image = details.lower().endswith((".png", ".jpg", ".jpeg"))
+    is_image = (
+        details.lower().endswith((".png", ".jpg", ".jpeg"))
+        or details.startswith("AgAC")
+    )
 
     caption_qr = (
         f"💳 <b>Оплата через {req['label']}</b>\n\n"
@@ -99,7 +102,7 @@ async def choose_requisite(callback: CallbackQuery, session: AsyncSession, state
     if is_image:
         await callback.message.delete()
         await callback.message.answer_photo(
-            FSInputFile(details),
+            details,
             caption=caption_qr,
             parse_mode="HTML",
             reply_markup=cancel_kb(),
