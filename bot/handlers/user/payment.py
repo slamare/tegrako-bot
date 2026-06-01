@@ -1,6 +1,6 @@
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, FSInputFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.states.states import PaymentSG
@@ -78,15 +78,35 @@ async def choose_requisite(callback: CallbackQuery, session: AsyncSession, state
 
     await state.update_data(payment_method=req["label"])
 
-    text = (
+    details = req["details"]
+    is_image = details.lower().endswith((".png", ".jpg", ".jpeg"))
+
+    caption_qr = (
         f"💳 <b>Оплата через {req['label']}</b>\n\n"
-        f"Переведите <b>{int(data['amount'])} ₽</b> по реквизитам:\n\n"
-        f"<code>{req['details']}</code>\n\n"
-        f"📌 В комментарии к переводу укажите ваш ID: <code>{callback.from_user.id}</code>\n\n"
+        f"Отсканируйте QR-код в приложении банка.\n\n"
+        f"📌 В комментарии укажите ваш ID: <code>{callback.from_user.id}</code>\n\n"
         f"После оплаты пришлите <b>скриншот</b> подтверждения."
     )
 
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=cancel_kb())
+    caption_text = (
+        f"💳 <b>Оплата через {req['label']}</b>\n\n"
+        f"Переведите <b>{int(data['amount'])} ₽</b> по реквизитам:\n\n"
+        f"<code>{details}</code>\n\n"
+        f"📌 В комментарии укажите ваш ID: <code>{callback.from_user.id}</code>\n\n"
+        f"После оплаты пришлите <b>скриншот</b> подтверждения."
+    )
+
+    if is_image:
+        await callback.message.delete()
+        await callback.message.answer_photo(
+            FSInputFile(details),
+            caption=caption_qr,
+            parse_mode="HTML",
+            reply_markup=cancel_kb(),
+        )
+    else:
+        await callback.message.edit_text(caption_text, parse_mode="HTML", reply_markup=cancel_kb())
+
     await state.set_state(PaymentSG.waiting_screenshot)
 
 
@@ -101,11 +121,9 @@ async def receive_screenshot(message: Message, session: AsyncSession, state: FSM
         await state.clear()
         return
 
-    # Берём лучшее качество фото
     file_id = message.photo[-1].file_id
     payment_method = data.get("payment_method", "—")
 
-    # Сохраняем платёж
     payment = await dal.create_payment(
         session,
         user_id=user.id,
@@ -115,7 +133,6 @@ async def receive_screenshot(message: Message, session: AsyncSession, state: FSM
         screenshot_file_id=file_id,
     )
 
-    # Отправляем карточку администраторам
     admin_text = (
         f"💳 <b>Новая оплата #{payment.id}</b>\n\n"
         f"👤 Пользователь: @{user.username or '—'} (<code>{user.telegram_id}</code>)\n"
@@ -136,7 +153,6 @@ async def receive_screenshot(message: Message, session: AsyncSession, state: FSM
                 parse_mode="HTML",
                 reply_markup=payment_approve_kb(payment.id),
             )
-            # Сохраняем message_id карточки для последующего редактирования
             await dal.update_payment(session, payment.id, admin_message_id=admin_msg.message_id)
         except Exception:
             pass
