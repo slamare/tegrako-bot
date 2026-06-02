@@ -177,12 +177,12 @@ async def get_revenue_stats(session: AsyncSession) -> dict:
     ) or 0
     monthly = await session.scalar(
         select(func.sum(Payment.amount)).where(
-            Payment.status == "approved", Payment.updated_at >= month_start
+            Payment.status == "approved", Payment.created_at >= month_start
         )
     ) or 0
     weekly = await session.scalar(
         select(func.sum(Payment.amount)).where(
-            Payment.status == "approved", Payment.updated_at >= week_start
+            Payment.status == "approved", Payment.created_at >= week_start
         )
     ) or 0
 
