@@ -1,12 +1,15 @@
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
+    InlineQuery, InlineQueryResultArticle, InputTextMessageContent,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 import re
 
 from bot.states.states import RegistrationSG
-from bot.keyboards.user_kb import main_menu_kb, back_kb, profile_kb, subscription_kb
+from bot.keyboards.user_kb import main_menu_kb, back_kb, profile_kb
 from bot.services import remnawave
 from config.settings import settings
 from db import dal
@@ -40,7 +43,6 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
         user = await dal.create_user(session, tg_id, username=message.from_user.username,
                                      referred_by=referred_by)
     elif referred_by and not user.referred_by:
-        # Записываем реферера если ещё не был установлен
         await dal.update_user(session, tg_id, referred_by=referred_by)
 
     if message.from_user.username and user.username != message.from_user.username:
@@ -189,7 +191,6 @@ async def my_subscription(callback: CallbackQuery, session: AsyncSession):
         [InlineKeyboardButton(text="🔄 Сбросить ссылку", callback_data="revoke_subscription")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="back_profile")],
     ])
-
     await callback.message.edit_text(
         f"📋 <b>Ваша подписка</b>\n\n"
         f"Нажмите кнопку ниже чтобы открыть ссылку подключения в браузере.\n\n"
@@ -213,8 +214,7 @@ async def revoke_subscription(callback: CallbackQuery, session: AsyncSession):
     await callback.message.edit_text(
         "⚠️ <b>Подтвердите сброс ссылки</b>\n\n"
         "Старая ссылка подписки перестанет работать.\nНужно будет обновить её во всех приложениях.",
-        parse_mode="HTML",
-        reply_markup=kb,
+        parse_mode="HTML", reply_markup=kb,
     )
 
 
@@ -235,9 +235,8 @@ async def revoke_subscription_confirm(callback: CallbackQuery, session: AsyncSes
         [InlineKeyboardButton(text="◀️ Назад", callback_data="back_profile")],
     ])
     await callback.message.edit_text(
-        f"✅ <b>Ссылка обновлена!</b>\n\nОбновите подписку во всех приложениях.",
-        parse_mode="HTML",
-        reply_markup=kb,
+        "✅ <b>Ссылка обновлена!</b>\n\nОбновите подписку во всех приложениях.",
+        parse_mode="HTML", reply_markup=kb,
     )
 
 
@@ -270,10 +269,7 @@ async def my_devices(callback: CallbackQuery, session: AsyncSession):
         platform = d.platform or "Неизвестно"
         model = d.device_model or "—"
         text += f"{i}. {platform} — {model}\n"
-        builder.button(
-            text=f"🗑 Удалить {i}. {platform}",
-            callback_data=f"delete_device:{d.hwid}"
-        )
+        builder.button(text=f"🗑 Удалить {i}. {platform}", callback_data=f"delete_device:{d.hwid}")
 
     builder.button(text="🗑 Удалить все устройства", callback_data="delete_all_devices")
     builder.button(text="◀️ Назад", callback_data="back_profile")
@@ -288,7 +284,6 @@ async def delete_device(callback: CallbackQuery, session: AsyncSession):
     if not user or not user.remnawave_uuid:
         await callback.answer("Подписка не найдена", show_alert=True)
         return
-
     hwid = callback.data.split(":", 1)[1]
     ok = await remnawave.delete_user_device(user.remnawave_uuid, hwid)
     if ok:
@@ -316,7 +311,6 @@ async def delete_all_devices(callback: CallbackQuery, session: AsyncSession):
     if not user or not user.remnawave_uuid:
         await callback.answer("Подписка не найдена", show_alert=True)
         return
-
     ok = await remnawave.delete_all_user_devices(user.remnawave_uuid)
     if ok:
         await callback.answer("✅ Все устройства удалены")
@@ -364,15 +358,7 @@ async def payment_history(callback: CallbackQuery, session: AsyncSession):
 
 @router.message(F.text == "👥 Пригласить друга")
 async def invite_friend(message: Message, session: AsyncSession):
-    await _send_invite(message, session)
-
-
-@router.message(Command("invite"))
-async def invite_command(message: Message, session: AsyncSession):
-    await _send_invite(message, session)
-
-
-async def _send_invite(message: Message, session: AsyncSession):
+    """Кнопка в меню — показывает ссылку и статистику пользователю в личке."""
     tg_id = message.from_user.id
     bot_info = await message.bot.get_me()
     link = f"https://t.me/{bot_info.username}?start=ref_{tg_id}"
@@ -382,30 +368,49 @@ async def _send_invite(message: Message, session: AsyncSession):
     ref_paid = await dal.get_referrals_with_payment(session, tg_id)
 
     bonus_text = f"\n🎁 За каждого оплатившего друга вы получаете <b>+{ref_days} дней</b>." if ref_days else ""
-    stats_text = f"\n\n📊 Приглашено: {ref_count} | Оплатили: {len(ref_paid)}"
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 Присоединиться", url=link)],
-    ])
-
-    banner_text = (
-        f"🚀 Привет! Хочешь стабильный и быстрый VPN?\n\n"
-        f"{settings.BOT_NAME} — поможет тебе с этим!\n\n"
-        f"📌 ЖМИ КНОПКУ И ПОПРОБУЙ БЕСПЛАТНО!"
-    )
-
-    # Отправляем баннер
-    await message.answer(banner_text, reply_markup=kb)
-
-    # Отдельным сообщением — личная ссылка со статистикой
     await message.answer(
-        f"👥 <b>Ваша реферальная ссылка:</b>\n\n"
+        f"👥 <b>Реферальная программа</b>\n\n"
+        f"Поделитесь ссылкой с друзьями:\n"
         f'<a href="{link}">{link}</a>'
-        f"{bonus_text}"
-        f"{stats_text}",
+        f"{bonus_text}\n\n"
+        f"📊 Приглашено: {ref_count} | Оплатили: {len(ref_paid)}",
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
+
+
+# ── Inline-режим: @tegrakobot invite ─────────────────────────────────────────
+
+@router.inline_query(F.query.lower() == "invite")
+async def inline_invite(inline_query: InlineQuery):
+    """@tegrakobot invite — возвращает баннер для вставки в любой чат."""
+    tg_id = inline_query.from_user.id
+    bot_info = await inline_query.bot.get_me()
+    link = f"https://t.me/{bot_info.username}?start=ref_{tg_id}"
+
+    text = (
+        f"🚀 Привет! Хочешь стабильный и быстрый VPN?\n\n"
+        f"{settings.BOT_NAME} — поможет тебе с этим!\n\n"
+        f"📌 Жми кнопку и попробуй бесплатно!"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Присоединиться", url=link)]
+    ])
+
+    result = InlineQueryResultArticle(
+        id="invite",
+        title="Поделиться ссылкой на бот",
+        description="Отправить реферальный баннер в чат",
+        input_message_content=InputTextMessageContent(
+            message_text=text,
+            parse_mode="HTML",
+        ),
+        reply_markup=kb,
+    )
+
+    await inline_query.answer([result], cache_time=30, is_personal=True)
 
 
 # ── Навигация ─────────────────────────────────────────────────────────────────
