@@ -3,7 +3,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
-    InlineQuery, InlineQueryResultArticle, InlineQueryResultPhoto, InputTextMessageContent,
+    InlineQuery, InlineQueryResultArticle, InputTextMessageContent,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 import re
@@ -405,18 +405,14 @@ async def inline_invite(inline_query: InlineQuery):
         [InlineKeyboardButton(text="🚀 Присоединиться", url=link)]
     ])
 
-    photo_url = (
-        "https://api.telegram.org/file/"
-        "bot8858740635:AAE6MLgbbV4JvBcbma3HTHUrt-2MJzki-AQ/photos/file_3.jpg"
-    )
-    result = InlineQueryResultPhoto(
+    result = InlineQueryResultArticle(
         id="invite",
-        photo_url=photo_url,
-        thumbnail_url=photo_url,
         title="Поделиться ссылкой на бот",
         description="Отправить реферальный баннер в чат",
-        caption=text,
-        parse_mode="HTML",
+        input_message_content=InputTextMessageContent(
+            message_text=text,
+            parse_mode="HTML",
+        ),
         reply_markup=kb,
     )
 
