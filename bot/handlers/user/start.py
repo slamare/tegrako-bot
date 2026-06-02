@@ -390,9 +390,15 @@ async def inline_invite(inline_query: InlineQuery):
     link = f"https://t.me/{bot_info.username}?start=ref_{tg_id}"
 
     text = (
-        f"🚀 Привет! Хочешь стабильный и быстрый VPN?\n\n"
-        f"{settings.BOT_NAME} — поможет тебе с этим!\n\n"
-        f"📌 Жми кнопку и подключайся!"
+        "— Алло, интернет опять не работает.\n"
+        "— А VPN включён?\n"
+        "— Да.\n"
+        "— Тогда выключи и включи.\n\n"
+        "Надоел этот ритуал? 🙃\n\n"
+        f"{settings.BOT_NAME} — VPN, который не требует шаманских обрядов.\n\n"
+        "💻 Несколько устройств\n"
+        "🌐 Безлимитный трафик\n"
+        "⚡ Быстрые серверы"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
