@@ -392,7 +392,7 @@ async def inline_invite(inline_query: InlineQuery):
     text = (
         f"🚀 Привет! Хочешь стабильный и быстрый VPN?\n\n"
         f"{settings.BOT_NAME} — поможет тебе с этим!\n\n"
-        f"📌 Жми кнопку и попробуй бесплатно!"
+        f"📌 Жми кнопку и подключайся!"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
