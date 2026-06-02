@@ -147,11 +147,12 @@ async def extend_subscription(uuid: str, duration_days: int) -> UserInfo:
     base = user.expire_at if user.expire_at > now else now
     new_expire = base + timedelta(days=duration_days)
     payload = {
+        "uuid": uuid,
         "expireAt": new_expire.isoformat(),
         "status": "ACTIVE",
     }
     async with httpx.AsyncClient(verify=True) as client:
-        resp = await client.put(_url(f"/users/{uuid}"), headers=_headers(), json=payload, timeout=10)
+        resp = await client.patch(_url("/users"), headers=_headers(), json=payload, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         u = data.get("response", data)
