@@ -1,6 +1,6 @@
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.types import Message, CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.states.states import PaymentSG
@@ -11,6 +11,43 @@ from db import dal
 router = Router()
 
 
+async def _get_tariffs_for_user(session: AsyncSession, user) -> list:
+    """
+    Возвращает список тарифов с учётом статуса пользователя:
+
+    - is_trial:    только новорегам без подписки и без одобренных платежей
+    - is_referral: только рефералам без одобренных платежей
+    - обычный:     всем, кроме рефералов у которых ещё не было ни одного платежа
+                   (им показывается реферальный тариф вместо обычного)
+    """
+    all_tariffs = await dal.get_active_tariffs(session)
+
+    has_payment = await dal.has_any_approved_payment(session, user.id)
+    has_sub = bool(user.remnawave_uuid)
+    is_referral = bool(user.referred_by)
+    used_referral = await dal.has_used_referral_tariff(session, user.id)
+
+    # Реферал на первом месяце — ещё не платил
+    is_first_month_referral = is_referral and not has_payment and not used_referral
+
+    result = []
+    for t in all_tariffs:
+        if t.is_trial:
+            # Только новорегам: нет подписки и нет ни одного платежа
+            if not has_sub and not has_payment:
+                result.append(t)
+        elif t.is_referral:
+            # Только рефералам на первом месяце
+            if is_first_month_referral:
+                result.append(t)
+        else:
+            # Обычный тариф — всем кроме рефералов на первом месяце
+            if not is_first_month_referral:
+                result.append(t)
+
+    return result
+
+
 @router.message(F.text == "🛒 Купить подписку")
 async def buy_subscription(message: Message, session: AsyncSession, state: FSMContext):
     user = await dal.get_user(session, message.from_user.id)
@@ -18,7 +55,7 @@ async def buy_subscription(message: Message, session: AsyncSession, state: FSMCo
         await message.answer("Сначала завершите регистрацию — нажмите /start")
         return
 
-    tariffs = await dal.get_active_tariffs(session)
+    tariffs = await _get_tariffs_for_user(session, user)
     if not tariffs:
         await message.answer("😔 Тарифы временно недоступны. Попробуйте позже.")
         return
@@ -40,11 +77,24 @@ async def choose_tariff(callback: CallbackQuery, session: AsyncSession, state: F
         await callback.answer("Тариф недоступен", show_alert=True)
         return
 
+    user = await dal.get_user(session, callback.from_user.id)
+
+    # Проверка триала
     if tariff.is_trial:
-        user = await dal.get_user(session, callback.from_user.id)
         if user and await dal.has_used_trial(session, user.id):
             await callback.answer(
                 "🚫 Пробный тариф доступен только новым пользователям без подписки.",
+                show_alert=True,
+            )
+            return
+
+    # Проверка реферального тарифа
+    if tariff.is_referral:
+        has_payment = await dal.has_any_approved_payment(session, user.id)
+        used_referral = await dal.has_used_referral_tariff(session, user.id)
+        if not user.referred_by or has_payment or used_referral:
+            await callback.answer(
+                "🚫 Реферальный тариф доступен только приглашённым пользователям на первый месяц.",
                 show_alert=True,
             )
             return
@@ -83,7 +133,6 @@ async def choose_requisite(callback: CallbackQuery, session: AsyncSession, state
 
     req = requisites[req_index]
     data = await state.get_data()
-    tariff = await dal.get_tariff(session, data["tariff_id"])
 
     await state.update_data(payment_method=req["label"])
 
@@ -145,11 +194,14 @@ async def receive_screenshot(message: Message, session: AsyncSession, state: FSM
         screenshot_file_id=file_id,
     )
 
+    trial_mark = " 🎁" if tariff.is_trial else ""
+    ref_mark = " 👥" if tariff.is_referral else ""
+
     admin_text = (
         f"💳 <b>Новая оплата #{payment.id}</b>\n\n"
         f"👤 Пользователь: @{user.username or '—'} (<code>{user.telegram_id}</code>)\n"
         f"🆔 Аккаунт: <code>{user.remnawave_username or '—'}</code>\n"
-        f"📦 Тариф: {tariff.name} ({tariff.duration_days} дн.)\n"
+        f"📦 Тариф: {tariff.name}{trial_mark}{ref_mark} ({tariff.duration_days} дн.)\n"
         f"💰 Сумма: {int(tariff.price)} ₽\n"
         f"💳 Метод: {payment_method}"
     )
@@ -188,7 +240,8 @@ async def wrong_screenshot_format(message: Message):
 
 @router.callback_query(F.data == "renew_subscription")
 async def renew_subscription(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
-    tariffs = await dal.get_active_tariffs(session)
+    user = await dal.get_user(session, callback.from_user.id)
+    tariffs = await _get_tariffs_for_user(session, user)
     if not tariffs:
         await callback.answer("Тарифы временно недоступны", show_alert=True)
         return
@@ -205,7 +258,8 @@ async def renew_subscription(callback: CallbackQuery, session: AsyncSession, sta
 
 @router.callback_query(F.data == "back_tariffs")
 async def back_to_tariffs(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
-    tariffs = await dal.get_active_tariffs(session)
+    user = await dal.get_user(session, callback.from_user.id)
+    tariffs = await _get_tariffs_for_user(session, user)
     await callback.message.edit_text(
         "📦 <b>Выберите тариф:</b>",
         parse_mode="HTML",

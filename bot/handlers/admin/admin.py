@@ -82,7 +82,7 @@ async def admin_set_ref_days(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id): return
     await state.set_state(AdminSG.set_referral_days)
     await callback.message.answer(
-        "Введите количество дней, которые получает реферер за каждого оплатившего друга.\n\n"
+        "Введите количество дней за каждого оплатившего реферала.\n\n"
         "Введите <b>0</b> чтобы отключить бонус.",
         parse_mode="HTML"
     )
@@ -99,7 +99,7 @@ async def save_referral_days(message: Message, session: AsyncSession, state: FSM
         return
     await dal.set_setting(session, "referral_days", str(days))
     await state.clear()
-    await message.answer(f"✅ Бонус за реферала установлен: <b>{days} дн.</b>", parse_mode="HTML")
+    await message.answer(f"✅ Бонус за реферала: <b>{days} дн.</b>", parse_mode="HTML")
 
 # ── Платежи ───────────────────────────────────────────────────────────────────
 
@@ -302,12 +302,17 @@ async def view_tariff(callback: CallbackQuery, session: AsyncSession):
     if not t: await callback.answer("Не найден", show_alert=True); return
     traffic = f"{t.traffic_limit_gb} ГБ" if t.traffic_limit_gb else "Безлимит"
     squad_info = f"\n🔗 Сквад: <code>{t.squad_uuid}</code>" if t.squad_uuid else "\n🔗 Сквад: дефолтный"
-    trial_info = "\n🎁 Тип: <b>Триальный</b> (только для новых)" if t.is_trial else "\n📦 Тип: Обычный"
+    if t.is_trial:
+        type_info = "\n🎁 Тип: <b>Триальный</b> (только новорегам)"
+    elif t.is_referral:
+        type_info = "\n👥 Тип: <b>Реферальный</b> (только рефералам, 1-й месяц)"
+    else:
+        type_info = "\n📦 Тип: Обычный"
     await callback.message.edit_text(
         f"📦 <b>{t.name}</b>\n{t.description or ''}\n⏱ {t.duration_days} дн. | 📊 {traffic} | "
         f"📱 {t.device_limit or '∞'} уст. | 💰 {int(t.price)} ₽\n{'✅ Активен' if t.is_active else '❌ Неактивен'}"
-        f"{squad_info}{trial_info}",
-        parse_mode="HTML", reply_markup=tariff_manage_kb(t.id, t.is_active, t.is_trial))
+        f"{squad_info}{type_info}",
+        parse_mode="HTML", reply_markup=tariff_manage_kb(t.id, t.is_active, t.is_trial, t.is_referral))
 
 @router.callback_query(F.data == "admin_create_tariff")
 async def create_tariff_start(callback: CallbackQuery, state: FSMContext):
@@ -363,35 +368,41 @@ async def tariff_price(message: Message, state: FSMContext):
     await state.update_data(price=price)
     await state.set_state(AdminSG.tariff_squad)
     await message.answer(
-        "Введите <b>UUID сквада</b> для этого тарифа (или '-' для дефолтного):\n\n"
-        f"Дефолтный сквад: <code>{settings.DEFAULT_SQUAD_UUID or 'не задан'}</code>",
+        "Введите <b>UUID сквада</b> (или '-' для дефолтного):",
         parse_mode="HTML"
     )
 
 @router.message(AdminSG.tariff_squad)
 async def tariff_squad(message: Message, state: FSMContext):
     text = message.text.strip()
-    squad_uuid = None if text == "-" else text
-    await state.update_data(squad_uuid=squad_uuid)
+    await state.update_data(squad_uuid=None if text == "-" else text)
     await state.set_state(AdminSG.tariff_trial)
     await message.answer(
-        "Это <b>пробный (Trial) тариф</b>?\n\n"
-        "Пробный тариф доступен только пользователям без подписки.\n\n"
-        "Отправьте <b>да</b> или <b>нет</b>.",
+        "Это <b>триальный</b> тариф? (только новорегам без подписки)\n\nОтправьте <b>да</b> или <b>нет</b>.",
         parse_mode="HTML"
     )
 
 @router.message(AdminSG.tariff_trial)
-async def tariff_trial(message: Message, session: AsyncSession, state: FSMContext):
+async def tariff_trial(message: Message, state: FSMContext):
     is_trial = message.text.strip().lower() in ("да", "yes", "1", "true", "+")
+    await state.update_data(is_trial=is_trial)
+    await state.set_state(AdminSG.tariff_referral)
+    await message.answer(
+        "Это <b>реферальный</b> тариф? (только рефералам на первый месяц)\n\nОтправьте <b>да</b> или <b>нет</b>.",
+        parse_mode="HTML"
+    )
+
+@router.message(AdminSG.tariff_referral)
+async def tariff_referral(message: Message, session: AsyncSession, state: FSMContext):
+    is_referral = message.text.strip().lower() in ("да", "yes", "1", "true", "+")
     data = await state.get_data()
-    data["is_trial"] = is_trial
+    data["is_referral"] = is_referral
     t = await dal.create_tariff(session, **data)
     await state.clear()
     squad_info = f"сквад: {data.get('squad_uuid')}" if data.get("squad_uuid") else "дефолтный сквад"
-    trial_info = " | 🎁 Триальный" if is_trial else ""
+    badge = " | 🎁 Триальный" if data.get("is_trial") else (" | 👥 Реферальный" if is_referral else "")
     await message.answer(
-        f"✅ Тариф <b>{t.name}</b> создан! {t.duration_days} дн. | {int(t.price)} ₽ | {squad_info}{trial_info}",
+        f"✅ Тариф <b>{t.name}</b> создан! {t.duration_days} дн. | {int(t.price)} ₽ | {squad_info}{badge}",
         parse_mode="HTML"
     )
 
@@ -403,10 +414,8 @@ async def toggle_tariff(callback: CallbackQuery, session: AsyncSession):
     if not t: await callback.answer("Не найден", show_alert=True); return
     await dal.update_tariff(session, tariff_id, is_active=not t.is_active)
     await callback.answer("Статус обновлён")
-    t_updated = await dal.get_tariff(session, tariff_id)
-    await callback.message.edit_reply_markup(
-        reply_markup=tariff_manage_kb(tariff_id, t_updated.is_active, t_updated.is_trial)
-    )
+    t = await dal.get_tariff(session, tariff_id)
+    await callback.message.edit_reply_markup(reply_markup=tariff_manage_kb(tariff_id, t.is_active, t.is_trial, t.is_referral))
 
 @router.callback_query(F.data.startswith("toggle_trial:"))
 async def toggle_trial(callback: CallbackQuery, session: AsyncSession):
@@ -415,12 +424,22 @@ async def toggle_trial(callback: CallbackQuery, session: AsyncSession):
     t = await dal.get_tariff(session, tariff_id)
     if not t: await callback.answer("Не найден", show_alert=True); return
     await dal.update_tariff(session, tariff_id, is_trial=not t.is_trial)
-    label = "🎁 Тариф помечен как триальный" if not t.is_trial else "🔓 Триал снят"
+    label = "🎁 Триальный включён" if not t.is_trial else "🔓 Триал снят"
     await callback.answer(label, show_alert=True)
-    t_updated = await dal.get_tariff(session, tariff_id)
-    await callback.message.edit_reply_markup(
-        reply_markup=tariff_manage_kb(tariff_id, t_updated.is_active, t_updated.is_trial)
-    )
+    t = await dal.get_tariff(session, tariff_id)
+    await callback.message.edit_reply_markup(reply_markup=tariff_manage_kb(tariff_id, t.is_active, t.is_trial, t.is_referral))
+
+@router.callback_query(F.data.startswith("toggle_referral:"))
+async def toggle_referral(callback: CallbackQuery, session: AsyncSession):
+    if not is_admin(callback.from_user.id): return
+    tariff_id = int(callback.data.split(":")[1])
+    t = await dal.get_tariff(session, tariff_id)
+    if not t: await callback.answer("Не найден", show_alert=True); return
+    await dal.update_tariff(session, tariff_id, is_referral=not t.is_referral)
+    label = "👥 Реферальный включён" if not t.is_referral else "🔓 Реферальный снят"
+    await callback.answer(label, show_alert=True)
+    t = await dal.get_tariff(session, tariff_id)
+    await callback.message.edit_reply_markup(reply_markup=tariff_manage_kb(tariff_id, t.is_active, t.is_trial, t.is_referral))
 
 @router.callback_query(F.data.startswith("delete_tariff:"))
 async def delete_tariff(callback: CallbackQuery, session: AsyncSession):
@@ -514,9 +533,7 @@ async def view_user(callback: CallbackQuery, session: AsyncSession):
     ban_status = "🚫 Да" if user.is_banned else "✅ Нет"
     ref_count = await dal.count_referrals(session, tg_id)
     ref_paid = await dal.get_referrals_with_payment(session, tg_id)
-    referrer_info = ""
-    if user.referred_by:
-        referrer_info = f"\nПривёл: <code>{user.referred_by}</code>"
+    referrer_info = f"\nПривёл: <code>{user.referred_by}</code>" if user.referred_by else ""
 
     await callback.message.edit_text(
         f"👤 TG: <code>{tg_id}</code> | @{user.username or '—'}\n"

@@ -52,7 +52,6 @@ async def count_users(session: AsyncSession) -> dict:
 
 
 async def count_referrals(session: AsyncSession, telegram_id: int) -> int:
-    """Количество пользователей, пришедших по ссылке этого юзера."""
     result = await session.scalar(
         select(func.count(User.id)).where(User.referred_by == telegram_id)
     )
@@ -60,7 +59,6 @@ async def count_referrals(session: AsyncSession, telegram_id: int) -> int:
 
 
 async def get_referrals_with_payment(session: AsyncSession, telegram_id: int) -> list[User]:
-    """Рефералы у которых есть хотя бы один одобренный платёж."""
     result = await session.execute(
         select(User)
         .where(User.referred_by == telegram_id)
@@ -87,7 +85,8 @@ async def get_tariff(session: AsyncSession, tariff_id: int) -> Optional[Tariff]:
 async def create_tariff(session: AsyncSession, **kwargs) -> Tariff:
     allowed = {
         "name", "description", "duration_days", "traffic_limit_gb",
-        "device_limit", "price", "is_active", "is_trial", "sort_order", "squad_uuid"
+        "device_limit", "price", "is_active", "is_trial", "is_referral",
+        "sort_order", "squad_uuid"
     }
     filtered = {k: v for k, v in kwargs.items() if k in allowed}
     tariff = Tariff(**filtered)
@@ -190,7 +189,7 @@ async def get_revenue_stats(session: AsyncSession) -> dict:
 
 
 async def has_used_trial(session: AsyncSession, user_id: int) -> bool:
-    """Возвращает True если пользователь уже использовал триал или имеет подписку."""
+    """True если пользователь уже использовал триал или имеет подписку."""
     result = await session.execute(
         select(Payment)
         .join(Tariff, Payment.tariff_id == Tariff.id)
@@ -204,6 +203,31 @@ async def has_used_trial(session: AsyncSession, user_id: int) -> bool:
         return True
     result = await session.execute(
         select(User).where(User.id == user_id, User.remnawave_uuid.is_not(None))
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def has_used_referral_tariff(session: AsyncSession, user_id: int) -> bool:
+    """True если пользователь уже оплатил реферальный тариф."""
+    result = await session.execute(
+        select(Payment)
+        .join(Tariff, Payment.tariff_id == Tariff.id)
+        .where(
+            Payment.user_id == user_id,
+            Payment.status == "approved",
+            Tariff.is_referral == True,
+        )
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def has_any_approved_payment(session: AsyncSession, user_id: int) -> bool:
+    """True если у пользователя есть хотя бы один одобренный платёж."""
+    result = await session.execute(
+        select(Payment).where(
+            Payment.user_id == user_id,
+            Payment.status == "approved",
+        )
     )
     return result.scalar_one_or_none() is not None
 

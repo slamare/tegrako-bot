@@ -28,6 +28,7 @@ class AdminSG(StatesGroup):
     tariff_price = State()
     tariff_squad = State()
     tariff_trial = State()
+    tariff_referral = State()
 
     # Рассылка
     broadcast_text = State()
