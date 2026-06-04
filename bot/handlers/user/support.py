@@ -1,4 +1,5 @@
 from aiogram import Router, F
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +11,14 @@ from db import dal
 
 router = Router()
 
+# Кнопки главного меню — не должны уходить в поддержку
+MENU_BUTTONS = {
+    "👤 Личный кабинет",
+    "🛒 Купить подписку",
+    "💬 Поддержка",
+    "👥 Пригласить друга",
+}
+
 
 @router.message(F.text == "💬 Поддержка")
 async def open_support(message: Message, session: AsyncSession, state: FSMContext):
@@ -18,14 +27,13 @@ async def open_support(message: Message, session: AsyncSession, state: FSMContex
         await message.answer("Сначала зарегистрируйтесь — нажмите /start")
         return
 
-    # Проверяем открытый тикет
     ticket = await dal.get_open_ticket(session, user.id)
     if ticket:
         await message.answer(
             f"💬 <b>Поддержка</b>\n\n"
-            f"У вас уже есть открытый тикет #{ticket.id}.\n"
-            f"Напишите ваш вопрос, и мы ответим как можно скорее.\n\n"
-            f"Чтобы закончить диалог, напишите /close",
+            f"У вас открытый тикет #{ticket.id}.\n"
+            f"Напишите вопрос — мы ответим как можно скорее.\n\n"
+            f"Чтобы закрыть диалог — отправьте /close",
             parse_mode="HTML",
             reply_markup=back_kb("back_main"),
         )
@@ -33,13 +41,12 @@ async def open_support(message: Message, session: AsyncSession, state: FSMContex
         await state.update_data(ticket_id=ticket.id)
         return
 
-    # Создаём новый тикет
     ticket = await dal.create_ticket(session, user.id)
     await message.answer(
         f"💬 <b>Поддержка</b>\n\n"
         f"Тикет #{ticket.id} открыт.\n"
-        f"Опишите вашу проблему, и мы ответим как можно скорее.\n\n"
-        f"Чтобы закончить диалог, напишите /close",
+        f"Опишите проблему — мы ответим как можно скорее.\n\n"
+        f"Чтобы закрыть диалог — отправьте /close",
         parse_mode="HTML",
         reply_markup=back_kb("back_main"),
     )
@@ -47,13 +54,12 @@ async def open_support(message: Message, session: AsyncSession, state: FSMContex
     await state.update_data(ticket_id=ticket.id)
 
 
-@router.message(SupportSG.waiting_message, F.text == "/close")
+@router.message(SupportSG.waiting_message, Command("close"))
 async def close_ticket_by_user(message: Message, session: AsyncSession, state: FSMContext):
     data = await state.get_data()
     ticket_id = data.get("ticket_id")
     if ticket_id:
         await dal.close_ticket(session, ticket_id)
-        # Уведомляем админов
         for admin_id in settings.admin_ids:
             try:
                 await message.bot.send_message(
@@ -64,7 +70,21 @@ async def close_ticket_by_user(message: Message, session: AsyncSession, state: F
                 pass
 
     await state.clear()
-    await message.answer("✅ Тикет закрыт. Если появятся вопросы — напишите снова.", reply_markup=main_menu_kb())
+    await message.answer(
+        "✅ Тикет закрыт. Если появятся вопросы — напишите снова.",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.message(
+    SupportSG.waiting_message,
+    F.text.regexp(r"^/") | F.text.in_(MENU_BUTTONS),
+)
+async def support_intercept_commands(message: Message, state: FSMContext):
+    """Команды и кнопки меню — выходим из режима тикета, не глотаем событие."""
+    await state.clear()
+    # Событие не обработано — aiogram передаст дальше по роутерам
+    return
 
 
 @router.message(SupportSG.waiting_message)
@@ -76,7 +96,6 @@ async def user_support_message(message: Message, session: AsyncSession, state: F
         await state.clear()
         return
 
-    # Определяем тип медиа
     media_file_id = None
     media_type = None
     text = message.text or message.caption
@@ -91,7 +110,6 @@ async def user_support_message(message: Message, session: AsyncSession, state: F
         media_file_id = message.video.file_id
         media_type = "video"
 
-    # Сохраняем сообщение
     await dal.add_ticket_message(
         session,
         ticket_id=ticket_id,
@@ -104,11 +122,9 @@ async def user_support_message(message: Message, session: AsyncSession, state: F
     )
 
     user = await dal.get_user(session, message.from_user.id)
-    ticket = await dal.get_ticket_by_id(session, ticket_id)
 
     from bot.keyboards.admin_kb import ticket_reply_kb
 
-    # Форвардим администраторам
     notify_text = (
         f"💬 <b>Тикет #{ticket_id}</b>\n"
         f"От: @{user.username or '—'} (<code>{user.telegram_id}</code>)\n"
@@ -117,14 +133,8 @@ async def user_support_message(message: Message, session: AsyncSession, state: F
 
     for admin_id in settings.admin_ids:
         try:
-            await message.bot.send_message(
-                admin_id,
-                notify_text,
-                parse_mode="HTML",
-            )
-            # Форвардим само сообщение
+            await message.bot.send_message(admin_id, notify_text, parse_mode="HTML")
             await message.forward(admin_id)
-            # Кнопки для ответа
             await message.bot.send_message(
                 admin_id,
                 "👆 Сообщение от пользователя:",

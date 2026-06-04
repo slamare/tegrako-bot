@@ -9,6 +9,7 @@ class PaymentSG(StatesGroup):
     choose_tariff = State()
     choose_requisite = State()
     waiting_screenshot = State()
+    enter_promo = State()
 
 
 class SupportSG(StatesGroup):
@@ -30,6 +31,11 @@ class AdminSG(StatesGroup):
     tariff_trial = State()
     tariff_referral = State()
 
+    # Промокоды
+    promo_code = State()
+    promo_discount = State()
+    promo_max_uses = State()
+
     # Рассылка
     broadcast_text = State()
 
@@ -38,3 +44,11 @@ class AdminSG(StatesGroup):
 
     # Реферальная система
     set_referral_days = State()
+
+    # Поиск пользователей
+    search_user = State()
+
+    # Кастомные кнопки меню
+    custbtn_text = State()
+    custbtn_url = State()
+    custbtn_condition = State()

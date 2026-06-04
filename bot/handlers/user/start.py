@@ -16,6 +16,64 @@ from db import dal
 
 router = Router()
 
+DOCS_KB = InlineKeyboardMarkup(inline_keyboard=[[
+    InlineKeyboardButton(
+        text="📄 Политика конфиденциальности",
+        url="https://telegra.ph/Politika-konfidencialnosti-04-01-26",
+    ),
+    InlineKeyboardButton(
+        text="📋 Пользовательское соглашение",
+        url="https://telegra.ph/Polzovatelskoe-soglashenie-04-01-19",
+    ),
+]])
+
+
+async def _check_access(session, tg_id: int, action: str) -> tuple[bool, str]:
+    """
+    Проверяет режим доступа для действия action: "register" | "purchase" | "any".
+    Возвращает (разрешено, текст_ошибки).
+    """
+    if tg_id in settings.admin_ids:
+        return True, ""
+    mode = await dal.get_setting(session, "access_mode", "open")
+    if mode == "open":
+        return True, ""
+    if mode == "closed":
+        return False, "🔧 Сервис временно недоступен. Попробуйте позже."
+    if mode == "invite_only" and action == "register":
+        return False, "🔒 Регистрация доступна только по реферальной ссылке."
+    if mode == "no_purchase" and action == "purchase":
+        return False, "🚫 Покупки временно недоступны."
+    if mode == "no_register" and action == "register":
+        return False, "🔒 Регистрация новых пользователей временно закрыта."
+    return True, ""
+
+
+async def _custom_buttons_kb(session, has_sub: bool) -> InlineKeyboardMarkup | None:
+    """Возвращает inline-клавиатуру с активными кастомными кнопками или None."""
+    buttons = await dal.get_active_custom_buttons(session)
+    filtered = [
+        b for b in buttons
+        if b.condition == "all" or (b.condition == "active_sub" and has_sub)
+    ]
+    if not filtered:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=b.text, url=b.url)]
+        for b in filtered
+    ])
+
+
+@router.message(Command("docs"))
+@router.message(Command("help"))
+async def cmd_docs(message: Message):
+    await message.answer(
+        "📄 <b>Документы</b>\n\n"
+        "Политика конфиденциальности и Пользовательское соглашение:",
+        parse_mode="HTML",
+        reply_markup=DOCS_KB,
+    )
+
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
@@ -24,10 +82,10 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
 
     maintenance = await dal.get_setting(session, "maintenance", "0")
     if maintenance == "1" and tg_id not in settings.admin_ids:
-        await message.answer("🔧 Ведутся технические работы. Пожалуйста, попробуйте позже.")
+        await message.answer("🔧 Ведутся технические работы. Попробуйте позже.")
         return
 
-    # Парсим реферальный параметр: /start ref_123456
+    # Реферальный параметр: /start ref_123456
     referred_by = None
     args = message.text.split(maxsplit=1)
     if len(args) > 1 and args[1].startswith("ref_"):
@@ -40,8 +98,11 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
 
     user = await dal.get_user(session, tg_id)
     if not user:
-        user = await dal.create_user(session, tg_id, username=message.from_user.username,
-                                     referred_by=referred_by)
+        user = await dal.create_user(
+            session, tg_id,
+            username=message.from_user.username,
+            referred_by=referred_by,
+        )
     elif referred_by and not user.referred_by:
         await dal.update_user(session, tg_id, referred_by=referred_by)
 
@@ -50,22 +111,35 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
 
     welcome_text = (
         f"👋 Добро пожаловать в <b>{settings.BOT_NAME}</b>!\n\n"
-        f"Надёжный VPN с быстрыми серверами.\n"
+        f"Сервис для защиты соединения и обеспечения приватности в сети.\n"
         f"Выберите действие в меню ниже."
     )
+
     if settings.WELCOME_IMAGE_URL:
         try:
             img = settings.WELCOME_IMAGE_URL
-            photo = img if img.startswith("http") else __import__('aiogram.types', fromlist=['FSInputFile']).FSInputFile(img)
-            await message.answer_photo(photo, caption=welcome_text, parse_mode="HTML", reply_markup=main_menu_kb())
+            photo = (
+                img if img.startswith("http")
+                else __import__("aiogram.types", fromlist=["FSInputFile"]).FSInputFile(img)
+            )
+            await message.answer_photo(
+                photo, caption=welcome_text, parse_mode="HTML", reply_markup=main_menu_kb()
+            )
         except Exception:
             await message.answer(welcome_text, parse_mode="HTML", reply_markup=main_menu_kb())
     else:
         await message.answer(welcome_text, parse_mode="HTML", reply_markup=main_menu_kb())
 
+    # Кастомные кнопки
+    has_sub = bool(user.remnawave_uuid) if user else False
+    custom_kb = await _custom_buttons_kb(session, has_sub)
+    if custom_kb:
+        await message.answer("🔗 Полезные ссылки:", reply_markup=custom_kb)
+
     if user.is_registered:
         return
 
+    # Автоматическая привязка если пользователь уже есть в панели
     rw_user = await remnawave.get_user_by_telegram_id(tg_id)
     if rw_user:
         await dal.update_user(
@@ -76,9 +150,15 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
         )
         await remnawave.add_user_to_default_squad(str(rw_user.uuid))
         await message.answer(
-            f"✅ Ваш аккаунт найден: <code>{rw_user.username}</code>.\nДобро пожаловать обратно!",
+            f"✅ Аккаунт найден: <code>{rw_user.username}</code>. Добро пожаловать!",
             parse_mode="HTML", reply_markup=main_menu_kb(),
         )
+        return
+
+    # Проверка режима доступа для регистрации
+    allowed, error = await _check_access(session, tg_id, "register")
+    if not allowed:
+        await message.answer(error)
         return
 
     await _start_registration(message, session, state)
@@ -92,12 +172,14 @@ async def _start_registration(message: Message, session: AsyncSession, state: FS
             await _finish_registration(message, session, tg_username, message.from_user.id)
             return
         await message.answer(
-            f"⚠️ Имя <code>@{tg_username}</code> уже занято в системе.\n\nВведите другое имя (только латиница, цифры, _):",
+            f"⚠️ Имя <code>@{tg_username}</code> уже занято.\n\n"
+            f"Введите другое имя (только латиница, цифры, _):",
             parse_mode="HTML", reply_markup=back_kb("cancel"),
         )
     else:
         await message.answer(
-            "👤 У вас не установлен username в Telegram.\n\nПридумайте имя для аккаунта (только латиница, цифры, _):",
+            "👤 У вас не установлен username в Telegram.\n\n"
+            "Придумайте имя для аккаунта (только латиница, цифры, _):",
             reply_markup=back_kb("cancel"),
         )
     await state.set_state(RegistrationSG.choose_username)
@@ -110,7 +192,9 @@ async def process_username_input(message: Message, session: AsyncSession, state:
         await message.answer("❌ От 3 до 32 символов: только латиница, цифры и _. Попробуйте снова:")
         return
     if await remnawave.username_exists(username):
-        await message.answer(f"❌ Имя <code>{username}</code> уже занято. Попробуйте другое:", parse_mode="HTML")
+        await message.answer(
+            f"❌ Имя <code>{username}</code> уже занято. Попробуйте другое:", parse_mode="HTML"
+        )
         return
     if await dal.get_user_by_remnawave_username(session, username):
         await message.answer("❌ Это имя уже используется. Попробуйте другое:")
@@ -119,10 +203,12 @@ async def process_username_input(message: Message, session: AsyncSession, state:
     await state.clear()
 
 
-async def _finish_registration(message: Message, session: AsyncSession, username: str, tg_id: int):
+async def _finish_registration(
+    message: Message, session: AsyncSession, username: str, tg_id: int
+):
     await dal.update_user(session, tg_id, remnawave_username=username, is_registered=True)
     await message.answer(
-        f"✅ Аккаунт зарегистрирован: <code>{username}</code>.\n\nТеперь можете купить подписку.",
+        f"✅ Аккаунт зарегистрирован: <code>{username}</code>.\n\nТеперь можете оформить подписку.",
         parse_mode="HTML", reply_markup=main_menu_kb(),
     )
 
@@ -149,8 +235,13 @@ async def profile(message: Message, session: AsyncSession):
                 days_left = (rw.expire_at - now).days
                 expire_str = rw.expire_at.strftime("%d.%m.%Y")
                 used_gb = round(rw.user_traffic.used_traffic_bytes / 1024 ** 3, 2)
-                limit_gb = round(rw.traffic_limit_bytes / 1024 ** 3, 1) if rw.traffic_limit_bytes else "∞"
-                s_emoji = {"ACTIVE": "🟢", "EXPIRED": "🔴", "DISABLED": "⚫"}.get(rw.status.value, "⚪")
+                limit_gb = (
+                    round(rw.traffic_limit_bytes / 1024 ** 3, 1)
+                    if rw.traffic_limit_bytes else "∞"
+                )
+                s_emoji = {"ACTIVE": "🟢", "EXPIRED": "🔴", "DISABLED": "⚫"}.get(
+                    rw.status.value, "⚪"
+                )
                 sub_info = (
                     f"\n\n<b>Подписка:</b>\n"
                     f"{s_emoji} Статус: {rw.status.value}\n"
@@ -201,19 +292,15 @@ async def my_subscription(callback: CallbackQuery, session: AsyncSession):
 
 
 @router.callback_query(F.data == "revoke_subscription")
-async def revoke_subscription(callback: CallbackQuery, session: AsyncSession):
-    user = await dal.get_user(session, callback.from_user.id)
-    if not user or not user.remnawave_uuid:
-        await callback.answer("Подписка не найдена", show_alert=True)
-        return
-
+async def revoke_subscription_confirm_prompt(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да, сбросить", callback_data="revoke_subscription_confirm")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="my_subscription")],
     ])
     await callback.message.edit_text(
         "⚠️ <b>Подтвердите сброс ссылки</b>\n\n"
-        "Старая ссылка подписки перестанет работать.\nНужно будет обновить её во всех приложениях.",
+        "Старая ссылка подписки перестанет работать. "
+        "Нужно будет обновить её во всех приложениях.",
         parse_mode="HTML", reply_markup=kb,
     )
 
@@ -256,13 +343,17 @@ async def my_devices(callback: CallbackQuery, session: AsyncSession):
     from aiogram.utils.keyboard import InlineKeyboardBuilder
 
     if not devices:
-        text = f"📱 <b>Мои устройства</b>\n\nУстройств не зарегистрировано.\nЛимит: {'∞' if not limit else limit} уст."
+        text = (
+            f"📱 <b>Мои устройства</b>\n\n"
+            f"Устройств не зарегистрировано.\n"
+            f"Лимит: {'∞' if not limit else limit} уст."
+        )
         builder = InlineKeyboardBuilder()
         builder.button(text="◀️ Назад", callback_data="back_profile")
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
         return
 
-    text = f"📱 <b>Мои устройства</b> ({len(devices)}/{('∞' if not limit else limit)})\n\n"
+    text = f"📱 <b>Мои устройства</b> ({len(devices)}/{'∞' if not limit else limit})\n\n"
     builder = InlineKeyboardBuilder()
 
     for i, d in enumerate(devices, 1):
@@ -294,13 +385,14 @@ async def delete_device(callback: CallbackQuery, session: AsyncSession):
 
 
 @router.callback_query(F.data == "delete_all_devices")
-async def delete_all_devices_confirm(callback: CallbackQuery):
+async def delete_all_devices_prompt(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да, удалить все", callback_data="delete_all_devices_confirm")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="my_devices")],
     ])
     await callback.message.edit_text(
-        "⚠️ <b>Удалить все устройства?</b>\n\nПосле этого нужно будет заново авторизоваться на всех устройствах.",
+        "⚠️ <b>Удалить все устройства?</b>\n\n"
+        "После этого нужно будет заново авторизоваться на всех устройствах.",
         parse_mode="HTML", reply_markup=kb,
     )
 
@@ -315,11 +407,12 @@ async def delete_all_devices(callback: CallbackQuery, session: AsyncSession):
     if ok:
         await callback.answer("✅ Все устройства удалены")
         await callback.message.edit_text(
-            "✅ <b>Все устройства удалены.</b>\n\nПри следующем подключении устройство добавится автоматически.",
+            "✅ <b>Все устройства удалены.</b>\n\n"
+            "При следующем подключении устройство добавится автоматически.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="◀️ Назад", callback_data="back_profile")]
-            ])
+            ]),
         )
     else:
         await callback.answer("❌ Ошибка при удалении", show_alert=True)
@@ -349,7 +442,10 @@ async def payment_history(callback: CallbackQuery, session: AsyncSession):
         lines = ["💳 <b>История платежей:</b>\n"]
         for p in payments[:10]:
             date_str = p.created_at.strftime("%d.%m.%Y")
-            lines.append(f"{s_emoji.get(p.status,'❓')} {date_str} — {int(p.amount)} ₽ ({p.tariff.name if p.tariff else '?'})")
+            tariff_name = p.tariff.name if p.tariff else ("доп. устройство" if p.payment_type == "device_slot" else "?")
+            lines.append(
+                f"{s_emoji.get(p.status, '❓')} {date_str} — {int(p.amount)} ₽ ({tariff_name})"
+            )
         text = "\n".join(lines)
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=back_kb("back_profile"))
 
@@ -358,7 +454,6 @@ async def payment_history(callback: CallbackQuery, session: AsyncSession):
 
 @router.message(F.text == "👥 Пригласить друга")
 async def invite_friend(message: Message, session: AsyncSession):
-    """Кнопка в меню — показывает ссылку и статистику пользователю в личке."""
     tg_id = message.from_user.id
     bot_info = await message.bot.get_me()
     link = f"https://t.me/{bot_info.username}?start=ref_{tg_id}"
@@ -367,7 +462,10 @@ async def invite_friend(message: Message, session: AsyncSession):
     ref_count = await dal.count_referrals(session, tg_id)
     ref_paid = await dal.get_referrals_with_payment(session, tg_id)
 
-    bonus_text = f"\n🎁 За каждого оплатившего друга вы получаете <b>+{ref_days} дней</b>." if ref_days else ""
+    bonus_text = (
+        f"\n🎁 За каждого оплатившего друга вы получаете <b>+{ref_days} дней</b>."
+        if ref_days else ""
+    )
 
     await message.answer(
         f"👥 <b>Реферальная программа</b>\n\n"
@@ -380,11 +478,10 @@ async def invite_friend(message: Message, session: AsyncSession):
     )
 
 
-# ── Inline-режим: @tegrakobot invite ─────────────────────────────────────────
+# ── Inline-режим: @bot invite ─────────────────────────────────────────────────
 
 @router.inline_query(F.query.lower() == "invite")
 async def inline_invite(inline_query: InlineQuery):
-    """@tegrakobot invite — возвращает баннер для вставки в любой чат."""
     tg_id = inline_query.from_user.id
     bot_info = await inline_query.bot.get_me()
     link = f"https://t.me/{bot_info.username}?start=ref_{tg_id}"
@@ -426,10 +523,12 @@ async def back_to_main(callback: CallbackQuery):
     await callback.message.delete()
     await callback.answer()
 
+
 @router.callback_query(F.data == "back_profile")
 async def back_to_profile(callback: CallbackQuery):
     await callback.message.delete()
     await callback.answer()
+
 
 @router.callback_query(F.data == "cancel")
 async def cancel_action(callback: CallbackQuery, state: FSMContext):

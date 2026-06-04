@@ -21,6 +21,8 @@ class User(Base):
     remnawave_uuid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     is_registered: Mapped[bool] = mapped_column(Boolean, default=False)
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
+    role: Mapped[str] = mapped_column(String(16), default="user")  # user / admin / developer
+    extra_device_slots: Mapped[int] = mapped_column(Integer, default=0)
     referred_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     last_seen: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -54,18 +56,38 @@ class Payment(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    tariff_id: Mapped[int] = mapped_column(ForeignKey("tariffs.id"), nullable=False)
+    tariff_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tariffs.id"), nullable=True)
     amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    payment_type: Mapped[str] = mapped_column(String(16), default="subscription")  # subscription / device_slot / promo_test
     status: Mapped[str] = mapped_column(String(16), default="pending")
     payment_method: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     screenshot_file_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     admin_message_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     approved_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    promo_id: Mapped[Optional[int]] = mapped_column(ForeignKey("promo_codes.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
     user: Mapped["User"] = relationship(back_populates="payments")
-    tariff: Mapped["Tariff"] = relationship(back_populates="payments")
+    tariff: Mapped[Optional["Tariff"]] = relationship(back_populates="payments")
+    promo: Mapped[Optional["PromoCode"]] = relationship(back_populates="payments")
+
+
+class PromoCode(Base):
+    __tablename__ = "promo_codes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
+    discount_percent: Mapped[int] = mapped_column(Integer, default=0)   # 0–100
+    discount_fixed: Mapped[float] = mapped_column(Numeric(10, 2), default=0)  # фиксированная скидка в ₽
+    tariff_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tariffs.id"), nullable=True)  # None = для любого тарифа
+    max_uses: Mapped[int] = mapped_column(Integer, default=1)
+    used_count: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    payments: Mapped[list["Payment"]] = relationship(back_populates="promo")
 
 
 class SupportTicket(Base):
@@ -113,3 +135,16 @@ class Notification(Base):
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     meta: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     sent_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class CustomMenuButton(Base):
+    """Дополнительные кнопки главного меню, настраиваемые из админки."""
+    __tablename__ = "custom_menu_buttons"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    text: Mapped[str] = mapped_column(String(64), nullable=False)
+    url: Mapped[str] = mapped_column(String(512), nullable=False)
+    condition: Mapped[str] = mapped_column(String(16), default="all")  # all / active_sub
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

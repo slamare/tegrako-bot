@@ -13,21 +13,23 @@ class Settings(BaseSettings):
     DATABASE_URL: str  # postgresql+asyncpg://user:pass@host/dbname
 
     # ── Remnawave panel ────────────────────────────────────────────────────
-    PANEL_API_URL: str        # https://panel.example.com/api
+    PANEL_API_URL: str
     PANEL_API_KEY: str
+    DEFAULT_SQUAD_UUID: Optional[str] = None
 
     # ── Bot UI ─────────────────────────────────────────────────────────────
     BOT_NAME: str = "TegraVPN"
-    WELCOME_IMAGE_URL: Optional[str] = None   # URL картинки для /start
-    SUPPORT_LINK: Optional[str] = None        # Ссылка в описании поддержки
+    WELCOME_IMAGE_URL: Optional[str] = None
+    SUPPORT_LINK: Optional[str] = None
 
-    # ── Payment requisites (можно несколько через ; ) ──────────────────────
-    # Формат: "label|details" через ;
-    # Пример: "Карта Сбер|2200 1234 5678 9012 Иван И.;СБП|+7 999 000 11 22"
+    # ── Payment requisites ─────────────────────────────────────────────────
+    # Формат: "Название|Реквизиты" через ;
     PAYMENT_REQUISITES: str = ""
 
+    # Цена за дополнительный слот устройства (₽)
+    DEVICE_SLOT_PRICE: float = 0.0
+
     # ── Notifications ──────────────────────────────────────────────────────
-    # За сколько дней до истечения слать напоминание (через запятую)
     NOTIFY_EXPIRY_DAYS: str = "3,1"
 
     @property
@@ -36,7 +38,6 @@ class Settings(BaseSettings):
 
     @property
     def payment_requisites(self) -> list[dict]:
-        """Возвращает список {'label': ..., 'details': ...}"""
         items = []
         for item in self.PAYMENT_REQUISITES.split(";"):
             item = item.strip()

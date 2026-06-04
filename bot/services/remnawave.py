@@ -3,7 +3,7 @@
 """
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import httpx
 from config.settings import settings
@@ -62,6 +62,22 @@ class SquadInfo:
     name: str
     members_count: int
 
+@dataclass
+class InboundInfo:
+    uuid: str
+    tag: str
+    type: str
+    is_enabled: bool
+
+@dataclass
+class HostInfo:
+    uuid: str
+    remark: str
+    address: str
+    port: int
+    inbound_uuid: str
+    is_enabled: bool
+
 
 def _parse_user(u: dict) -> UserInfo:
     expire_at = datetime.fromisoformat(u["expireAt"].replace("Z", "+00:00"))
@@ -84,7 +100,9 @@ def _parse_user(u: dict) -> UserInfo:
 async def username_exists(username: str) -> bool:
     try:
         async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.get(_url(f"/users/by-username/{username}"), headers=_headers(), timeout=10)
+            resp = await client.get(
+                _url(f"/users/by-username/{username}"), headers=_headers(), timeout=10
+            )
             return resp.status_code == 200
     except Exception:
         return False
@@ -159,12 +177,89 @@ async def extend_subscription(uuid: str, duration_days: int) -> UserInfo:
         return _parse_user(u)
 
 
+async def set_expire_at(uuid: str, expire_at: datetime) -> Optional[UserInfo]:
+    """Установить конкретную дату истечения (используется для бессрочного доступа)."""
+    payload = {
+        "uuid": uuid,
+        "expireAt": expire_at.isoformat(),
+        "status": "ACTIVE",
+    }
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.patch(_url("/users"), headers=_headers(), json=payload, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            u = data.get("response", data)
+            return _parse_user(u)
+    except Exception:
+        return None
+
+
+async def update_user_limits(
+    uuid: str,
+    traffic_limit_gb: Optional[int] = None,
+    device_limit: Optional[int] = None,
+) -> Optional[UserInfo]:
+    """Изменить лимиты трафика и устройств."""
+    payload: dict = {"uuid": uuid}
+    if traffic_limit_gb is not None:
+        payload["trafficLimitBytes"] = traffic_limit_gb * 1024 ** 3
+    if device_limit is not None:
+        payload["hwidDeviceLimit"] = device_limit
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.patch(_url("/users"), headers=_headers(), json=payload, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            u = data.get("response", data)
+            return _parse_user(u)
+    except Exception:
+        return None
+
+
+async def set_user_status(uuid: str, status: str) -> Optional[UserInfo]:
+    """Включить (ACTIVE) или выключить (DISABLED) пользователя."""
+    payload = {"uuid": uuid, "status": status}
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.patch(_url("/users"), headers=_headers(), json=payload, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            u = data.get("response", data)
+            return _parse_user(u)
+    except Exception:
+        return None
+
+
+async def delete_panel_user(uuid: str) -> bool:
+    """Удалить пользователя из панели."""
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.delete(_url(f"/users/{uuid}"), headers=_headers(), timeout=10)
+            return resp.status_code in (200, 204)
+    except Exception:
+        return False
+
+
+async def reset_user_traffic(uuid: str) -> bool:
+    """Сброс использованного трафика."""
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.post(
+                _url(f"/users/{uuid}/actions/reset-traffic"),
+                headers=_headers(),
+                timeout=10,
+            )
+            return resp.status_code in (200, 201)
+    except Exception:
+        return False
+
+
 async def get_subscription_info(uuid: str) -> Optional[UserInfo]:
     return await get_user_by_uuid(uuid)
 
 
 async def revoke_subscription(uuid: str) -> Optional[UserInfo]:
-    """Сброс ссылки подписки — генерирует новый shortUuid."""
     try:
         async with httpx.AsyncClient(verify=True) as client:
             resp = await client.post(
@@ -202,7 +297,6 @@ async def get_internal_squads() -> list[SquadInfo]:
 
 
 async def add_user_to_squad(user_uuid: str, squad_uuid: str) -> bool:
-    """Добавить пользователя во internal squad."""
     try:
         async with httpx.AsyncClient(verify=True) as client:
             resp = await client.post(
@@ -217,8 +311,9 @@ async def add_user_to_squad(user_uuid: str, squad_uuid: str) -> bool:
         return False
 
 
-async def add_user_to_default_squad(user_uuid: str, tariff_squad_uuid: Optional[str] = None) -> bool:
-    """Добавить пользователя в сквад тарифа или дефолтный."""
+async def add_user_to_default_squad(
+    user_uuid: str, tariff_squad_uuid: Optional[str] = None
+) -> bool:
     squad_uuid = tariff_squad_uuid or settings.DEFAULT_SQUAD_UUID
     if not squad_uuid:
         return False
@@ -228,13 +323,10 @@ async def add_user_to_default_squad(user_uuid: str, tariff_squad_uuid: Optional[
 # ── HWID Devices ───────────────────────────────────────────────────────────
 
 async def get_user_devices(user_uuid: str) -> list[HwidDevice]:
-    """Получить список устройств пользователя."""
     try:
         async with httpx.AsyncClient(verify=True) as client:
             resp = await client.get(
-                _url(f"/hwid/devices/{user_uuid}"),
-                headers=_headers(),
-                timeout=10,
+                _url(f"/hwid/devices/{user_uuid}"), headers=_headers(), timeout=10
             )
             data = resp.json()
             devices = data.get("response", {}).get("devices", [])
@@ -255,7 +347,6 @@ async def get_user_devices(user_uuid: str) -> list[HwidDevice]:
 
 
 async def delete_user_device(user_uuid: str, hwid: str) -> bool:
-    """Удалить одно устройство пользователя."""
     try:
         async with httpx.AsyncClient(verify=True) as client:
             resp = await client.post(
@@ -270,7 +361,6 @@ async def delete_user_device(user_uuid: str, hwid: str) -> bool:
 
 
 async def delete_all_user_devices(user_uuid: str) -> bool:
-    """Удалить все устройства пользователя."""
     try:
         async with httpx.AsyncClient(verify=True) as client:
             resp = await client.post(
@@ -308,7 +398,56 @@ async def get_nodes() -> list[NodeInfo]:
 async def restart_node(node_uuid: str) -> bool:
     try:
         async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.post(_url(f"/nodes/{node_uuid}/restart"), headers=_headers(), timeout=10)
+            resp = await client.post(
+                _url(f"/nodes/{node_uuid}/restart"), headers=_headers(), timeout=10
+            )
             return resp.status_code in (200, 201)
     except Exception:
         return False
+
+
+# ── Inbounds & Hosts ───────────────────────────────────────────────────────
+
+async def get_inbounds() -> list[InboundInfo]:
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.get(_url("/inbounds"), headers=_headers(), timeout=10)
+            data = resp.json()
+            raw = data.get("response", [])
+            # response может быть списком или словарём с ключом
+            if isinstance(raw, dict):
+                raw = raw.get("inbounds", [])
+            return [
+                InboundInfo(
+                    uuid=i["uuid"],
+                    tag=i.get("tag", ""),
+                    type=i.get("type", ""),
+                    is_enabled=i.get("isEnabled", True),
+                )
+                for i in raw
+            ]
+    except Exception:
+        return []
+
+
+async def get_hosts() -> list[HostInfo]:
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.get(_url("/hosts"), headers=_headers(), timeout=10)
+            data = resp.json()
+            raw = data.get("response", [])
+            if isinstance(raw, dict):
+                raw = raw.get("hosts", [])
+            return [
+                HostInfo(
+                    uuid=h["uuid"],
+                    remark=h.get("remark", ""),
+                    address=h.get("address", ""),
+                    port=h.get("port", 0),
+                    inbound_uuid=h.get("inboundUuid", ""),
+                    is_enabled=h.get("isEnabled", True),
+                )
+                for h in raw
+            ]
+    except Exception:
+        return []
