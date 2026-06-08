@@ -263,3 +263,8 @@ docker compose logs -f
 ```
 
 ---
+
+
+## License
+
+This project is licensed under the GLWTPL - see the [GLWTPL](https://github.com/me-shaon/GLWTPL/) file for details.
