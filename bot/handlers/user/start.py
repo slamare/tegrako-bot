@@ -9,12 +9,40 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import re
 
 from bot.states.states import RegistrationSG
-from bot.keyboards.user_kb import main_menu_kb, back_kb, profile_kb
+from bot.keyboards.user_kb import main_menu_kb, back_kb, profile_kb, proxy_kb
 from bot.services import remnawave
 from config.settings import settings
 from db import dal
 
 router = Router()
+
+def _has_active_proxy_access(rw) -> bool:
+    """True если подписка активна и до истечения > 5 дней."""
+    if not rw or rw.status.value != "ACTIVE":
+        return False
+    now = datetime.now(timezone.utc)
+    return (rw.expire_at - now).days > 5
+
+
+async def _build_main_menu(session, tg_id: int, remnawave_uuid: str | None) -> "ReplyKeyboardMarkup":
+    """Главная клавиатура с кнопкой прокси если подписка активна > 5 дней."""
+    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+    show_proxy = False
+    if remnawave_uuid:
+        try:
+            from bot.services import remnawave as rw_svc
+            rw = await rw_svc.get_subscription_info(remnawave_uuid)
+            show_proxy = _has_active_proxy_access(rw)
+        except Exception:
+            pass
+    rows = [
+        [KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="🛒 Купить подписку")],
+        [KeyboardButton(text="💬 Поддержка"), KeyboardButton(text="👥 Пригласить друга")],
+    ]
+    if show_proxy:
+        rows.append([KeyboardButton(text="📡 Proxy для Telegram")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
 
 DOCS_KB = InlineKeyboardMarkup(inline_keyboard=[[
     InlineKeyboardButton(
@@ -115,6 +143,7 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
         f"Выберите действие в меню ниже."
     )
 
+    menu_kb = await _build_main_menu(session, tg_id, user.remnawave_uuid)
     if settings.WELCOME_IMAGE_URL:
         try:
             img = settings.WELCOME_IMAGE_URL
@@ -123,12 +152,12 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
                 else __import__("aiogram.types", fromlist=["FSInputFile"]).FSInputFile(img)
             )
             await message.answer_photo(
-                photo, caption=welcome_text, parse_mode="HTML", reply_markup=main_menu_kb()
+                photo, caption=welcome_text, parse_mode="HTML", reply_markup=menu_kb
             )
         except Exception:
-            await message.answer(welcome_text, parse_mode="HTML", reply_markup=main_menu_kb())
+            await message.answer(welcome_text, parse_mode="HTML", reply_markup=menu_kb)
     else:
-        await message.answer(welcome_text, parse_mode="HTML", reply_markup=main_menu_kb())
+        await message.answer(welcome_text, parse_mode="HTML", reply_markup=menu_kb)
 
     # Кастомные кнопки
     has_sub = bool(user.remnawave_uuid) if user else False
@@ -211,6 +240,7 @@ async def _finish_registration(
         f"✅ Аккаунт зарегистрирован: <code>{username}</code>.\n\nТеперь можете оформить подписку.",
         parse_mode="HTML", reply_markup=main_menu_kb(),
     )
+    # Примечание: прокси-кнопка появится автоматически при следующем /start после оплаты
 
 
 # ── Личный кабинет ────────────────────────────────────────────────────────────
@@ -451,6 +481,39 @@ async def payment_history(callback: CallbackQuery, session: AsyncSession):
 
 
 # ── Реферальная система ───────────────────────────────────────────────────────
+
+@router.message(F.text == "📡 Proxy для Telegram")
+async def proxy_for_telegram(message: Message, session: AsyncSession):
+    user = await dal.get_user(session, message.from_user.id)
+    if not user or not user.remnawave_uuid or not user.mtproto_secret:
+        await message.answer("📡 Прокси недоступен. Оформите подписку.")
+        return
+
+    from bot.services import remnawave as rw_svc
+    from bot.services import telemt as telemt_svc
+    rw = await rw_svc.get_subscription_info(user.remnawave_uuid)
+    if not _has_active_proxy_access(rw):
+        await message.answer("📡 Прокси доступен только при активной подписке с запасом более 5 дней.")
+        return
+
+    link = await telemt_svc.get_proxy_link(user.remnawave_username)
+    if not link:
+        link = telemt_svc.build_link_fallback(user.mtproto_secret)
+
+    if not link:
+        await message.answer("Не удалось получить ссылку. Попробуйте позже.")
+        return
+
+    await message.answer(
+        "📡 <b>Proxy для Telegram</b>\n\n"
+        "Нажмите кнопку чтобы подключить прокси в Telegram.\n\n"
+        "⚠️ <b>Ссылка персональная.</b> Не передавайте её другим — "
+        "при обнаружении посторонних подключений ссылка будет сброшена.\n\n"
+        "🔒 Деактивируется автоматически если подписка не оплачена более 5 дней.",
+        parse_mode="HTML",
+        reply_markup=proxy_kb(link),
+    )
+
 
 @router.message(F.text == "👥 Пригласить друга")
 async def invite_friend(message: Message, session: AsyncSession):
