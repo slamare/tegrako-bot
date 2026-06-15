@@ -275,6 +275,21 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
 
             await dal.update_payment(session, payment_id, status="approved", approved_by=callback.from_user.id)
 
+            # ── MTProto прокси ─────────────────────────────────────────────
+            try:
+                from bot.services import telemt as telemt_svc
+                if not user.mtproto_secret:
+                    secret = telemt_svc.generate_secret()
+                    telemt_svc.add_user(user.remnawave_username, secret)
+                    await dal.update_user(session, user.telegram_id, mtproto_secret=secret)
+                elif not telemt_svc.user_exists(user.remnawave_username):
+                    # Был удалён за просрочку — восстанавливаем
+                    telemt_svc.add_user(user.remnawave_username, user.mtproto_secret)
+            except Exception as _e:
+                import logging as _log
+                _log.getLogger(__name__).warning(f"MTProto provision failed: {_e}")
+            # ──────────────────────────────────────────────────────────────
+
             # Промокод — инкрементируем счётчик
             if payment.promo_id:
                 await dal.use_promo(session, payment.promo_id)
