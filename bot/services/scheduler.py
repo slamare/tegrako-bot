@@ -51,12 +51,56 @@ async def check_expiring_subscriptions(bot: Bot):
                 logger.warning(f"Notification check failed for {user.telegram_id}: {e}")
 
 
+async def revoke_expired_mtproto(bot: Bot):
+    """Удаляет из telemt пользователей с просроченной > 5 дней подпиской."""
+    from datetime import timedelta
+    from sqlalchemy import update as sa_update
+    from db.models import User
+    from db.database import async_session_maker
+    from bot.services import telemt as telemt_svc
+
+    async with async_session_maker() as session:
+        users = await dal.get_all_users(session, only_registered=True)
+        now = datetime.now(timezone.utc)
+        grace = timedelta(days=5)
+
+        for user in users:
+            if not user.mtproto_secret or not user.remnawave_uuid:
+                continue
+            try:
+                rw = await remnawave.get_subscription_info(user.remnawave_uuid)
+                if not rw:
+                    continue
+                if rw.status.value == "EXPIRED" and (now - rw.expire_at) > grace:
+                    telemt_svc.remove_user(user.remnawave_username)
+                    await session.execute(
+                        sa_update(User)
+                        .where(User.telegram_id == user.telegram_id)
+                        .values(mtproto_secret=None)
+                    )
+                    await session.commit()
+                    logger.info(f"MTProto revoked for expired user {user.remnawave_username}")
+                    try:
+                        await bot.send_message(
+                            user.telegram_id,
+                            "📡 <b>MTProto прокси деактивирован.</b>\n\n"
+                            "Подписка не оплачена более 5 дней. "
+                            "После продления прокси восстановится автоматически.",
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(f"MTProto revoke check failed for {user.telegram_id}: {e}")
+
+
 async def scheduler(bot: Bot):
     """Проверка каждые 6 часов."""
     await asyncio.sleep(5)
     while True:
         try:
             await check_expiring_subscriptions(bot)
+            await revoke_expired_mtproto(bot)
         except Exception as e:
             logger.error(f"Scheduler error: {e}")
         await asyncio.sleep(6 * 3600)
