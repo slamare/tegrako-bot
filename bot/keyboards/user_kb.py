@@ -52,13 +52,20 @@ def profile_kb(has_subscription: bool = True) -> InlineKeyboardMarkup:
     if has_subscription:
         builder.button(text="📋 Моя подписка", callback_data="my_subscription")
         builder.button(text="📱 Мои устройства", callback_data="my_devices")
-        builder.button(text="📡 MTProto прокси", callback_data="my_mtproto")
         if settings.DEVICE_SLOT_PRICE > 0:
             builder.button(text="➕ Добавить устройство", callback_data="buy_device_slot")
     builder.button(text="💳 История платежей", callback_data="payment_history")
     builder.button(text="◀️ Назад", callback_data="back_main")
     builder.adjust(1)
     return builder.as_markup()
+
+
+def proxy_kb(proxy_url: str) -> InlineKeyboardMarkup:
+    """Inline-кнопка которая открывает tg://proxy прямо в Telegram."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔗 Подключить прокси", url=proxy_url)],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
+    ])
 
 
 def subscription_kb() -> InlineKeyboardMarkup:
