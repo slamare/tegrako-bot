@@ -7,7 +7,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from config.settings import settings
 from db.database import init_db, create_tables
 from bot.middlewares.middlewares import DatabaseMiddleware, BanCheckMiddleware
-from bot.handlers.user import start, payment, support
+from bot.handlers.user import start, payment, support, mtproto
 from bot.handlers.admin import admin
 from bot.services.scheduler import scheduler
 
@@ -31,6 +31,7 @@ async def main():
     dp.include_router(start.router)
     dp.include_router(payment.router)
     dp.include_router(support.router)
+    dp.include_router(mtproto.router)
     dp.include_router(admin.router)
 
     asyncio.create_task(scheduler(bot))
