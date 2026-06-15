@@ -23,6 +23,7 @@ class User(Base):
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
     role: Mapped[str] = mapped_column(String(16), default="user")  # user / admin / developer
     extra_device_slots: Mapped[int] = mapped_column(Integer, default=0)
+    mtproto_secret: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     referred_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     last_seen: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
