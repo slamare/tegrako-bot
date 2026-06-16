@@ -278,13 +278,15 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
             # ── MTProto прокси ─────────────────────────────────────────────
             try:
                 from bot.services import telemt as telemt_svc
+                # Лимит IP = лимит устройств тарифа (минимум 1)
+                max_ips = max(1, tariff.device_limit) if tariff and tariff.device_limit else 1
                 if not user.mtproto_secret:
                     secret = telemt_svc.generate_secret()
-                    telemt_svc.add_user(user.remnawave_username, secret)
+                    telemt_svc.add_user(user.remnawave_username, secret, max_ips=max_ips)
                     await dal.update_user(session, user.telegram_id, mtproto_secret=secret)
-                elif not telemt_svc.user_exists(user.remnawave_username):
-                    # Был удалён за просрочку — восстанавливаем
-                    telemt_svc.add_user(user.remnawave_username, user.mtproto_secret)
+                else:
+                    # Обновляем лимит IP при каждой оплате (тариф мог смениться)
+                    telemt_svc.add_user(user.remnawave_username, user.mtproto_secret, max_ips=max_ips)
             except Exception as _e:
                 import logging as _log
                 _log.getLogger(__name__).warning(f"MTProto provision failed: {_e}")
