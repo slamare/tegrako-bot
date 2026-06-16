@@ -7,7 +7,7 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 import re
-
+from datetime import datetime, timezone
 from bot.states.states import RegistrationSG
 from bot.keyboards.user_kb import main_menu_kb, back_kb, profile_kb, proxy_kb
 from bot.services import remnawave
