@@ -41,7 +41,16 @@ async def admin_panel(message: Message, session: AsyncSession):
         "⚙️ <b>Панель администратора</b>", parse_mode="HTML",
         reply_markup=admin_menu_kb(maintenance_on=maintenance == "1"),
     )
-
+ 
+@router.message(F.text == "⚙️ Администратор")
+async def admin_button(message: Message, session: AsyncSession):
+    if not is_admin(message.from_user.id):
+        return
+    maintenance = await dal.get_setting(session, "maintenance", "0")
+    await message.answer(
+        "⚙️ <b>Панель администратора</b>", parse_mode="HTML",
+        reply_markup=admin_menu_kb(maintenance_on=maintenance == "1"),
+    )
 
 @router.callback_query(F.data == "admin_menu")
 async def admin_menu_cb(callback: CallbackQuery, session: AsyncSession):

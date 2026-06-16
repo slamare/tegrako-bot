@@ -18,7 +18,6 @@ async def _get_tariffs_for_user(session: AsyncSession, user) -> list:
     has_sub = bool(user.remnawave_uuid)
     is_referral = bool(user.referred_by)
     used_referral = await dal.has_used_referral_tariff(session, user.id)
-
     is_first_month_referral = is_referral and not has_payment and not used_referral
 
     result = []
@@ -117,13 +116,11 @@ async def choose_tariff(callback: CallbackQuery, session: AsyncSession, state: F
         f"Выберите способ оплаты:"
     )
 
-    # Кнопка промокода
-    kb_rows = [[btn] for btn in [
-        InlineKeyboardButton(text=req["label"], callback_data=f"req:{i}")
-        for i, req in enumerate(requisites)
-    ]]
+    kb_rows = [[InlineKeyboardButton(text=req["label"], callback_data=f"req:{i}")]
+               for i, req in enumerate(requisites)]
     kb_rows.append([InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")])
     kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back_tariffs")])
+    kb_rows.append([InlineKeyboardButton(text="🏠 Меню", callback_data="back_main")])
 
     await callback.message.edit_text(
         text, parse_mode="HTML",
@@ -135,9 +132,46 @@ async def choose_tariff(callback: CallbackQuery, session: AsyncSession, state: F
 @router.callback_query(PaymentSG.choose_requisite, F.data == "enter_promo")
 async def enter_promo_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(PaymentSG.enter_promo)
-    await callback.message.answer(
+    await callback.message.edit_text(
         "🎟 Введите промокод:",
-        reply_markup=cancel_kb(),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_promo")]
+        ]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cancel_promo")
+async def cancel_promo(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
+    """Отмена ввода промокода — возврат к выбору реквизита."""
+    data = await state.get_data()
+    tariff_id = data.get("tariff_id")
+    tariff = await dal.get_tariff(session, tariff_id) if tariff_id else None
+
+    await state.set_state(PaymentSG.choose_requisite)
+
+    requisites = settings.payment_requisites
+    kb_rows = [[InlineKeyboardButton(text=req["label"], callback_data=f"req:{i}")]
+               for i, req in enumerate(requisites)]
+    kb_rows.append([InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")])
+    kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back_tariffs")])
+    kb_rows.append([InlineKeyboardButton(text="🏠 Меню", callback_data="back_main")])
+
+    traffic = f"{tariff.traffic_limit_gb} ГБ" if tariff and tariff.traffic_limit_gb else "Безлимит"
+    devices = f"{tariff.device_limit} уст." if tariff and tariff.device_limit else "Безлимит"
+    amount = data.get("amount", float(tariff.price) if tariff else 0)
+
+    text = (
+        f"📦 <b>{tariff.name if tariff else '—'}</b>\n\n"
+        f"⏱ Срок: {tariff.duration_days if tariff else '—'} дней\n"
+        f"📊 Трафик: {traffic}\n"
+        f"📱 Устройств: {devices}\n"
+        f"💰 Стоимость: <b>{int(amount)} ₽</b>\n\n"
+        f"Выберите способ оплаты:"
+    )
+    await callback.message.edit_text(
+        text, parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
     )
     await callback.answer()
 
@@ -148,9 +182,15 @@ async def apply_promo(message: Message, session: AsyncSession, state: FSMContext
     tariff_id = data.get("tariff_id")
     original_amount = data.get("amount", 0)
 
+    # Удаляем сообщение с кодом (конфиденциальность)
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
     promo, error = await dal.validate_promo(session, message.text.strip(), tariff_id)
     if error:
-        await message.answer(f"❌ {error}")
+        await message.answer(f"❌ {error}\n\nВведите другой промокод или нажмите Отмена.")
         return
 
     new_amount = await dal.apply_promo_discount(promo, original_amount)
@@ -168,6 +208,7 @@ async def apply_promo(message: Message, session: AsyncSession, state: FSMContext
     kb_rows = [[InlineKeyboardButton(text=req["label"], callback_data=f"req:{i}")]
                for i, req in enumerate(requisites)]
     kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back_tariffs")])
+    kb_rows.append([InlineKeyboardButton(text="🏠 Меню", callback_data="back_main")])
 
     await message.answer(
         f"✅ Промокод <b>{promo.code}</b> применён! Скидка: {disc}\n\n"
@@ -197,9 +238,12 @@ async def choose_requisite(callback: CallbackQuery, session: AsyncSession, state
         or details.startswith("AgAC")
     )
 
-    promo_note = ""
-    if data.get("promo_code"):
-        promo_note = f"\n🎟 Промокод: <b>{data['promo_code']}</b>"
+    promo_note = f"\n🎟 Промокод: <b>{data['promo_code']}</b>" if data.get("promo_code") else ""
+
+    nav_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_payment")],
+        [InlineKeyboardButton(text="🏠 Меню", callback_data="back_main")],
+    ])
 
     caption_qr = (
         f"💳 <b>Оплата через {req['label']}</b>\n\n"
@@ -219,17 +263,31 @@ async def choose_requisite(callback: CallbackQuery, session: AsyncSession, state
     )
 
     if is_image:
-        await callback.message.delete()
+        # Для фото нельзя edit_text, поэтому удаляем и отправляем новое
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
         await callback.message.answer_photo(
             details,
             caption=caption_qr,
             parse_mode="HTML",
-            reply_markup=cancel_kb(),
+            reply_markup=nav_kb,
         )
     else:
-        await callback.message.edit_text(caption_text, parse_mode="HTML", reply_markup=cancel_kb())
+        await callback.message.edit_text(caption_text, parse_mode="HTML", reply_markup=nav_kb)
 
     await state.set_state(PaymentSG.waiting_screenshot)
+
+
+@router.callback_query(F.data == "cancel_payment")
+async def cancel_payment(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    await state.clear()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.answer("Оплата отменена")
 
 
 @router.message(PaymentSG.waiting_screenshot, F.photo)
@@ -286,12 +344,13 @@ async def receive_screenshot(message: Message, session: AsyncSession, state: FSM
         except Exception:
             pass
 
+    from bot.keyboards.user_kb import main_menu_kb
     await message.answer(
         "✅ <b>Скриншот получен!</b>\n\n"
         "Платёж отправлен на проверку. Обычно это занимает до 30 минут.\n"
         "После подтверждения вы получите уведомление.",
         parse_mode="HTML",
-        reply_markup=__import__("bot.keyboards.user_kb", fromlist=["main_menu_kb"]).main_menu_kb(),
+        reply_markup=main_menu_kb(is_admin=message.from_user.id in settings.admin_ids),
     )
     await state.clear()
 
@@ -356,7 +415,8 @@ async def buy_device_slot(callback: CallbackQuery, session: AsyncSession, state:
 
     kb_rows = [[InlineKeyboardButton(text=req["label"], callback_data=f"req:{i}")]
                for i, req in enumerate(requisites)]
-    kb_rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")])
+    kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="my_devices")])
+    kb_rows.append([InlineKeyboardButton(text="🏠 Меню", callback_data="back_main")])
 
     await callback.message.edit_text(
         f"📱 <b>Дополнительный слот устройства</b>\n\n"
