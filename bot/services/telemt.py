@@ -94,14 +94,70 @@ def generate_secret() -> str:
     return secrets.token_hex(16)
 
 
-def add_user(username: str, secret: str) -> None:
+def _add_ip_limit_line(config: str, username: str, max_ips: int) -> str:
+    """Вставляет/обновляет строку в [access.user_max_unique_ips]."""
+    lines = config.splitlines()
+    new_line = f"{username} = {max_ips}"
+
+    section_start = None
+    for i, line in enumerate(lines):
+        if line.strip() == "[access.user_max_unique_ips]":
+            section_start = i
+            break
+
+    if section_start is None:
+        return config.rstrip("\n") + "\n[access.user_max_unique_ips]\n" + new_line + "\n"
+
+    # Если пользователь уже есть в секции — обновляем
+    for i in range(section_start + 1, len(lines)):
+        stripped = lines[i].strip()
+        if stripped.startswith("["):
+            break
+        m = __import__("re").match(r'^(\w+)\s*=\s*(\d+)', stripped)
+        if m and m.group(1) == username:
+            lines[i] = new_line
+            return "\n".join(lines) + "\n"
+
+    # Новый — ищем конец секции и вставляем
+    section_end = len(lines)
+    for i in range(section_start + 1, len(lines)):
+        stripped = lines[i].strip()
+        if stripped.startswith("[") and not stripped.startswith("[["):
+            section_name = stripped.lstrip("[").rstrip("]").strip()
+            if not section_name.startswith("access."):
+                section_end = i
+                break
+
+    insert_at = section_end
+    for i in range(section_end - 1, section_start, -1):
+        if lines[i].strip() and not lines[i].strip().startswith("#"):
+            insert_at = i + 1
+            break
+
+    lines.insert(insert_at, new_line)
+    return "\n".join(lines) + "\n"
+
+
+def _remove_ip_limit_line(config: str, username: str) -> str:
+    """Удаляет строку пользователя из [access.user_max_unique_ips]."""
+    import re
+    result = []
+    for line in config.splitlines():
+        m = re.match(r'^(\w+)\s*=\s*(\d+)', line.strip())
+        if m and m.group(1) == username:
+            continue
+        result.append(line)
+    return "\n".join(result) + "\n"
+
+
+def add_user(username: str, secret: str, max_ips: int = 1) -> None:
     """Добавляет пользователя в конфиг. Hot-reload, рестарт не нужен."""
     config = _read_config()
-    if _user_in_config(config, username):
-        return  # уже есть
-    config = _add_user_line(config, username, secret)
+    if not _user_in_config(config, username):
+        config = _add_user_line(config, username, secret)
+    config = _add_ip_limit_line(config, username, max_ips)
     _write_config(config)
-    logger.info(f"telemt: added user {username}")
+    logger.info(f"telemt: added user {username} (max_ips={max_ips})")
 
 
 def remove_user(username: str) -> None:
@@ -110,6 +166,7 @@ def remove_user(username: str) -> None:
     if not _user_in_config(config, username):
         return
     config = _remove_user_line(config, username)
+    config = _remove_ip_limit_line(config, username)
     _write_config(config)
     logger.info(f"telemt: removed user {username}")
 
