@@ -3,36 +3,35 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from db.models import Tariff
 from config.settings import settings
 
-
 def remove_kb() -> ReplyKeyboardRemove:
-    return ReplyKeyboardRemove()
-
+    """Удаляет reply-клавиатуру"""
+    return ReplyKeyboardRemove(remove_keyboard=True)
 
 def main_menu_kb(is_admin: bool = False, has_sub: bool = False, show_proxy: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="👤 Личный кабинет", callback_data="menu_profile")
+    builder.button(text="👤 Моя подписка", callback_data="menu_profile")
     builder.button(text="🛒 Купить подписку", callback_data="menu_buy")
     builder.button(text="💬 Поддержка", callback_data="menu_support")
     builder.button(text="👥 Пригласить друга", callback_data="menu_invite")
+    
     if show_proxy:
-        builder.button(text="📡 MTProto Proxy", callback_data="menu_proxy")
+        builder.button(text="📡 Proxy для Telegram", callback_data="menu_proxy")
+    
     if is_admin:
         builder.button(text="⚙️ Администратор", callback_data="admin_menu")
+    
     builder.adjust(2)
     return builder.as_markup()
-
 
 def back_main_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
     ])
 
-
 def back_kb(callback_data: str = "main_menu") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀️ Назад", callback_data=callback_data)]
     ])
-
 
 def nav_kb(back_cb: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -41,7 +40,6 @@ def nav_kb(back_cb: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu"),
         ]
     ])
-
 
 def tariffs_kb(tariffs: list[Tariff]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -54,7 +52,6 @@ def tariffs_kb(tariffs: list[Tariff]) -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
-
 def payment_methods_kb(requisites: list[dict], back_cb: str = "menu_buy") -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for i, req in enumerate(requisites):
@@ -65,23 +62,20 @@ def payment_methods_kb(requisites: list[dict], back_cb: str = "menu_buy") -> Inl
     builder.adjust(1)
     return builder.as_markup()
 
-
 def cancel_kb(back_cb: str = "main_menu") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отмена", callback_data=back_cb)]
     ])
-
 
 def profile_kb(has_subscription: bool = True) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if has_subscription:
         builder.button(text="📋 Моя подписка", callback_data="my_subscription")
         builder.button(text="📱 Мои устройства", callback_data="my_devices")
-    builder.button(text="💳 История платежей", callback_data="payment_history")
-    builder.button(text="🏠 Меню", callback_data="main_menu")
-    builder.adjust(1)
+        builder.button(text="💳 История платежей", callback_data="payment_history")
+        builder.button(text="🏠 Меню", callback_data="main_menu")
+        builder.adjust(1)
     return builder.as_markup()
-
 
 def devices_kb(devices: list, show_buy_slot: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -100,13 +94,11 @@ def devices_kb(devices: list, show_buy_slot: bool = False) -> InlineKeyboardMark
     builder.adjust(1)
     return builder.as_markup()
 
-
 def proxy_kb(proxy_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔗 Подключить прокси", url=proxy_url)],
         [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
     ])
-
 
 def subscription_detail_kb(sub_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[

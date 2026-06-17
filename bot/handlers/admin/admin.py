@@ -828,8 +828,21 @@ async def toggle_promo(callback: CallbackQuery, session: AsyncSession):
 async def delete_promo(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
         return
-    await dal.delete_promo(session, int(callback.data.split(":")[1]))
-    await callback.answer("Удалён")
+        
+    promo_id = int(callback.data.split(":")[1])
+    
+    # Сначала очищаем ссылки в payments
+    await session.execute(
+        update(Payment)
+        .where(Payment.promo_id == promo_id)
+        .values(promo_id=None)
+    )
+    await session.flush()
+    
+    # Теперь удаляем промокод
+    await dal.delete_promo(session, promo_id)
+    
+    await callback.answer("✅ Промокод удалён")
     await admin_promos(callback, session)
 
 # ── Инбаунды и хосты ──────────────────────────────────────────────────────────
