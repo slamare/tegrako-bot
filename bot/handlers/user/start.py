@@ -70,10 +70,14 @@ async def _show_main_menu(target, session, tg_id: int, remnawave_uuid: str | Non
     text = _welcome_text()
 
     if isinstance(target, CallbackQuery):
+        msg = target.message
         try:
-            await target.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+            if msg.photo:
+                await msg.edit_caption(caption=text, parse_mode="HTML", reply_markup=kb)
+            else:
+                await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
         except Exception:
-            await target.message.answer(text, parse_mode="HTML", reply_markup=kb)
+            await msg.answer(text, parse_mode="HTML", reply_markup=kb)
         await target.answer()
     else:
         await target.answer(text, parse_mode="HTML", reply_markup=kb)
@@ -254,13 +258,25 @@ async def _profile_text_and_kb(session, tg_id: int):
     return text, profile_kb(has_sub)
 
 
+async def _edit_or_answer(callback: CallbackQuery, text: str, kb, parse_mode: str = "HTML"):
+    """edit_caption для фото-сообщений, edit_text для текстовых."""
+    msg = callback.message
+    try:
+        if msg.photo:
+            await msg.edit_caption(caption=text, parse_mode=parse_mode, reply_markup=kb)
+        else:
+            await msg.edit_text(text, parse_mode=parse_mode, reply_markup=kb)
+    except Exception:
+        await msg.answer(text, parse_mode=parse_mode, reply_markup=kb)
+
+
 @router.callback_query(F.data == "menu_profile")
 async def menu_profile(callback: CallbackQuery, session: AsyncSession):
     text, kb = await _profile_text_and_kb(session, callback.from_user.id)
     if not text:
         await callback.answer("Сначала зарегистрируйтесь — нажмите /start", show_alert=True)
         return
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await _edit_or_answer(callback, text, kb)
     await callback.answer()
 
 
@@ -277,7 +293,7 @@ async def my_subscription(callback: CallbackQuery, session: AsyncSession):
         await callback.answer("Не удалось получить данные", show_alert=True)
         return
 
-    await callback.message.edit_text(
+    await _edit_or_answer(callback,
         f"📋 <b>Ваша подписка</b>\n\n"
         f"Нажмите кнопку ниже чтобы открыть ссылку подключения.\n\n"
         f"⚠️ <b>Сброс ссылки</b> — сгенерирует новую. Старая перестанет работать.",
@@ -293,10 +309,10 @@ async def revoke_subscription_prompt(callback: CallbackQuery):
         [InlineKeyboardButton(text="✅ Да, сбросить", callback_data="revoke_subscription_confirm")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="my_subscription")],
     ])
-    await callback.message.edit_text(
+    await _edit_or_answer(callback,
         "⚠️ <b>Подтвердите сброс ссылки</b>\n\n"
         "Старая ссылка перестанет работать. Нужно обновить её во всех приложениях.",
-        parse_mode="HTML", reply_markup=kb,
+        kb,
     )
     await callback.answer()
 
@@ -311,10 +327,9 @@ async def revoke_subscription_confirm(callback: CallbackQuery, session: AsyncSes
     if not rw:
         await callback.answer("Ошибка при сбросе ссылки", show_alert=True)
         return
-    await callback.message.edit_text(
+    await _edit_or_answer(callback,
         "✅ <b>Ссылка обновлена!</b>\n\nОбновите подписку во всех приложениях.",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔗 Открыть новую подписку", url=rw.subscription_url)],
             [InlineKeyboardButton(text="◀️ Назад", callback_data="menu_profile")],
             [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
@@ -347,9 +362,8 @@ async def my_devices(callback: CallbackQuery, session: AsyncSession):
     else:
         text += "Устройств не зарегистрировано."
 
-    await callback.message.edit_text(
-        text, parse_mode="HTML",
-        reply_markup=devices_kb(devices, show_buy_slot=show_buy),
+    await _edit_or_answer(callback,
+        text, devices_kb(devices, show_buy_slot=show_buy),
     )
     await callback.answer()
 
@@ -375,10 +389,10 @@ async def delete_all_devices_prompt(callback: CallbackQuery):
         [InlineKeyboardButton(text="✅ Да, удалить все", callback_data="delete_all_devices_confirm")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="my_devices")],
     ])
-    await callback.message.edit_text(
+    await _edit_or_answer(callback,
         "⚠️ <b>Удалить все устройства?</b>\n\n"
         "После этого нужно заново авторизоваться на всех устройствах.",
-        parse_mode="HTML", reply_markup=kb,
+        kb,
     )
     await callback.answer()
 
@@ -431,10 +445,7 @@ async def payment_history(callback: CallbackQuery, session: AsyncSession):
             )
         text = "\n".join(lines)
 
-    await callback.message.edit_text(
-        text, parse_mode="HTML",
-        reply_markup=nav_kb("menu_profile"),
-    )
+    await _edit_or_answer(callback, text, nav_kb("menu_profile"))
     await callback.answer()
 
 
@@ -454,7 +465,7 @@ async def menu_invite(callback: CallbackQuery, session: AsyncSession):
         f"\n🎁 За каждого оплатившего друга — <b>+{ref_days} дней</b>." if ref_days else ""
     )
 
-    await callback.message.edit_text(
+    await _edit_or_answer(callback,
         f"👥 <b>Реферальная программа</b>\n\n"
         f"Ваша ссылка:\n<code>{link}</code>"
         f"{bonus_text}\n\n"
@@ -493,7 +504,7 @@ async def menu_proxy(callback: CallbackQuery, session: AsyncSession):
         await callback.answer("Не удалось получить ссылку.", show_alert=True)
         return
 
-    await callback.message.edit_text(
+    await _edit_or_answer(callback,
         "📡 <b>MTProto Proxy</b>\n\n"
         "Нажмите кнопку чтобы подключить прокси в Telegram.\n\n"
         "⚠️ <b>Ссылка персональная.</b> Не передавайте её другим.\n\n"
@@ -520,7 +531,7 @@ async def menu_support(callback: CallbackQuery, session: AsyncSession, state: FS
     await state.set_state(SupportSG.waiting_message)
     await state.update_data(ticket_id=ticket.id)
 
-    await callback.message.edit_text(
+    await _edit_or_answer(callback,
         f"💬 <b>Поддержка</b>\n\n"
         f"Тикет #{ticket.id} открыт.\n"
         f"Напишите ваш вопрос — ответим как можно скорее.\n\n"
