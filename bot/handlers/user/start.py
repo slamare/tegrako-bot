@@ -598,12 +598,26 @@ async def catch_unknown_text(message: Message, session: AsyncSession):
         await message.delete()
     except Exception:
         pass
-    await message.answer(
+    
+    sent_msg = await message.answer(
         "💬 Для общения с поддержкой откройте раздел через меню.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💬 Открыть поддержку", callback_data="menu_support")]
         ]),
     )
+    
+    # Автоудаление через 15 секунд
+    async def _auto_delete():
+        try:
+            await asyncio.sleep(60)
+            await message.bot.delete_message(
+                chat_id=message.chat.id,
+                message_id=sent_msg.message_id,
+            )
+        except Exception:
+            pass
+    
+    asyncio.create_task(_auto_delete())
 
 # ── Отмена ────────────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "cancel")
