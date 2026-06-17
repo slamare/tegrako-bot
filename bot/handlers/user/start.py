@@ -4,6 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
     InlineQuery, InlineQueryResultArticle, InputTextMessageContent,
+    ReplyKeyboardMarkup,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 import re
@@ -25,7 +26,6 @@ def _has_active_proxy_access(rw) -> bool:
 
 
 async def _build_main_menu(session, tg_id: int, remnawave_uuid: str | None) -> ReplyKeyboardMarkup:
-    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
     show_proxy = False
     if remnawave_uuid:
         try:
