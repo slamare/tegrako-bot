@@ -8,6 +8,7 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 import re
+import asyncio
 from datetime import datetime, timezone
 from bot.states.states import RegistrationSG, SupportSG
 from bot.keyboards.user_kb import (
