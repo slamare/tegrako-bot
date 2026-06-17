@@ -570,11 +570,26 @@ async def inline_invite(inline_query: InlineQuery):
 
 @router.callback_query(F.data == "back_main")
 async def back_to_main(callback: CallbackQuery, session: AsyncSession):
-    # Удаляем inline-сообщение, пользователь возвращается к reply-меню
+    user = await dal.get_user(session, callback.from_user.id)
+    is_adm = callback.from_user.id in settings.admin_ids
+
+    welcome_text = (
+        f"👋 Добро пожаловать в <b>{settings.BOT_NAME}</b>!\n\n"
+        f"Сервис для защиты соединения и обеспечения приватности в сети.\n"
+        f"Выберите действие в меню ниже."
+    )
+    menu_kb = main_menu_kb(is_admin=is_adm)
+
     try:
-        await callback.message.delete()
+        await callback.message.edit_text(welcome_text, parse_mode="HTML")
     except Exception:
-        pass
+        # Если сообщение с фото — нельзя edit_text, удаляем и шлём новое
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.message.answer(welcome_text, parse_mode="HTML", reply_markup=menu_kb)
+
     await callback.answer()
 
 
@@ -639,7 +654,7 @@ async def cancel_action(callback: CallbackQuery, state: FSMContext):
 
 # ── Перехват случайных сообщений ──────────────────────────────────────────────
 
-@router.message(F.text)
+@router.message(F.text & ~F.text.in_(KNOWN_BUTTONS))
 async def catch_unknown_text(message: Message, session: AsyncSession):
     """
     Перехватывает любой текст не обработанный другими хендлерами.
@@ -647,8 +662,8 @@ async def catch_unknown_text(message: Message, session: AsyncSession):
     """
     text = message.text or ""
 
-    # Пропускаем кнопки меню и команды — они обработаны выше
-    if text in KNOWN_BUTTONS or text.startswith("/"):
+    # Пропускаем команды — они обработаны выше
+    if text.startswith("/"):
         return
 
     # Удаляем сообщение пользователя
