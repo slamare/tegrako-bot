@@ -24,7 +24,12 @@ router = Router()
 def is_admin(tg_id: int) -> bool:
     return tg_id in settings.admin_ids
 
-back_btn = lambda: [[InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")]]
+# Кнопки навигации
+def admin_nav_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+    ])
 
 async def _edit_or_answer(callback: CallbackQuery, text: str, reply_markup=None, parse_mode: str = "HTML"):
     msg = callback.message
@@ -101,7 +106,8 @@ async def admin_stats(callback: CallbackQuery, session: AsyncSession):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Изменить бонус за реферала", callback_data="admin_set_ref_days")],
         [InlineKeyboardButton(text="🗑 Сбросить выручку", callback_data="admin_reset_revenue")],
-        back_btn()[0],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
     await _edit_or_answer(callback, text, reply_markup=kb)
 
@@ -112,6 +118,7 @@ async def admin_reset_revenue(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да, сбросить", callback_data="admin_reset_revenue_confirm")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_stats")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
     await _edit_or_answer(
         callback,
@@ -176,10 +183,15 @@ async def admin_access_mode(callback: CallbackQuery, session: AsyncSession):
     current = await dal.get_setting(session, "access_mode", "open")
     label = ACCESS_MODE_LABELS.get(current, current)
     desc = ACCESS_MODE_DESC.get(current, " ")
+    
+    kb = access_mode_kb(current)
+    kb.inline_keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")])
+    kb.inline_keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")])
+    
     await _edit_or_answer(
         callback,
         f"🔐 <b>Режим доступа</b>\n\nТекущий: <b>{label}</b>\n<i>{desc}</i>\n\nВыберите новый режим:",
-        reply_markup=access_mode_kb(current),
+        reply_markup=kb,
     )
 
 @router.callback_query(F.data.startswith("set_access_mode:"))
@@ -204,13 +216,13 @@ async def admin_pending_payments(callback: CallbackQuery, session: AsyncSession)
         await _edit_or_answer(
             callback,
             "✅ Нет ожидающих оплат.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=back_btn()),
+            reply_markup=admin_nav_kb(),
         )
         return
     await _edit_or_answer(
         callback,
         f"⏳ Ожидающих: {len(payments)}. Карточки ниже 👇",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=back_btn()),
+        reply_markup=admin_nav_kb(),
     )
     for p in payments:
         u, t = p.user, p.tariff
@@ -316,7 +328,7 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
                 parse_mode="HTML", reply_markup=main_menu_kb(),
             )
 
-        caption = (callback.message.caption or "") + "\n\n✅ <b>ПОДТВЕРЖДЕНО</b>"
+        caption = (callback.message.caption or " ") + "\n\n✅ <b>ПОДТВЕРЖДЕНО</b>"
         if callback.message.photo:
             await callback.message.edit_caption(caption=caption, parse_mode="HTML")
         else:
@@ -348,7 +360,7 @@ async def reject_payment(callback: CallbackQuery, session: AsyncSession):
         "❌ <b>Оплата отклонена.</b>\nЕсли считаете ошибкой — обратитесь в поддержку.",
         parse_mode="HTML",
     )
-    caption = (callback.message.caption or "") + "\n\n❌ <b>ОТКЛОНЕНО</b>"
+    caption = (callback.message.caption or " ") + "\n\n❌ <b>ОТКЛОНЕНО</b>"
     if callback.message.photo:
         await callback.message.edit_caption(caption=caption, parse_mode="HTML")
     else:
@@ -371,6 +383,7 @@ async def admin_tickets(callback: CallbackQuery, session: AsyncSession):
         )
     builder.button(text="📁 Закрытые тикеты", callback_data="admin_closed_tickets")
     builder.button(text="◀️ Назад", callback_data="admin_menu")
+    builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
     header = f"🎫 <b>Открытые тикеты: {len(tickets)}</b>" if tickets else "✅ Открытых тикетов нет."
     await _edit_or_answer(callback, header, reply_markup=builder.as_markup())
@@ -388,6 +401,7 @@ async def admin_closed_tickets(callback: CallbackQuery, session: AsyncSession):
             callback_data=f"view_ticket:{t.id}",
         )
     builder.button(text="◀️ Назад", callback_data="admin_tickets")
+    builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
     header = f"📁 <b>Закрытые тикеты (последние {len(tickets)})</b>"
     await _edit_or_answer(callback, header, reply_markup=builder.as_markup())
@@ -408,13 +422,18 @@ async def view_ticket(callback: CallbackQuery, session: AsyncSession):
         for m in msgs
     )
     status_icon = "🟢" if ticket.status == "open" else "🔒"
+    
+    kb = ticket_reply_kb(ticket_id, is_closed=ticket.status == "closed")
+    kb.inline_keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_tickets")])
+    kb.inline_keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")])
+    
     await _edit_or_answer(
         callback,
         f"🎫 <b>Тикет #{ticket_id}</b> {status_icon}\n"
         f"@{u.username or '—'} (<code>{u.telegram_id}</code>)\n"
         f"Аккаунт: <code>{u.remnawave_username or '—'}</code>\n\n"
         f"<b>Последние сообщения:</b>\n{history or 'нет'}",
-        reply_markup=ticket_reply_kb(ticket_id, is_closed=ticket.status == "closed"),
+        reply_markup=kb,
     )
 
 @router.callback_query(F.data.startswith("reply_ticket:"))
@@ -485,7 +504,10 @@ async def admin_tariffs(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
         return
     tariffs = await dal.get_all_tariffs(session)
-    await _edit_or_answer(callback, "📦 <b>Тарифы</b>", reply_markup=tariff_list_kb(tariffs))
+    kb = tariff_list_kb(tariffs)
+    kb.inline_keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")])
+    kb.inline_keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")])
+    await _edit_or_answer(callback, "📦 <b>Тарифы</b>", reply_markup=kb)
 
 @router.callback_query(F.data.startswith("admin_tariff:"))
 async def view_tariff(callback: CallbackQuery, session: AsyncSession):
@@ -503,6 +525,11 @@ async def view_tariff(callback: CallbackQuery, session: AsyncSession):
         type_info = "\n👥 Тип: <b>Реферальный</b>"
     else:
         type_info = "\n📦 Тип: Обычный"
+    
+    kb = tariff_manage_kb(t.id, t.is_active, t.is_trial, t.is_referral)
+    kb.inline_keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_tariffs")])
+    kb.inline_keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")])
+    
     await _edit_or_answer(
         callback,
         f"📦 <b>{t.name}</b>\n{t.description or ''}\n"
@@ -510,7 +537,7 @@ async def view_tariff(callback: CallbackQuery, session: AsyncSession):
         f"📱 {t.device_limit or '∞'} уст. | 💰 {int(t.price)} ₽\n"
         f"{'✅ Активен' if t.is_active else '❌ Неактивен'}"
         f"{squad_info}{type_info}",
-        reply_markup=tariff_manage_kb(t.id, t.is_active, t.is_trial, t.is_referral),
+        reply_markup=kb,
     )
 
 @router.callback_query(F.data == "admin_create_tariff")
@@ -674,7 +701,10 @@ async def delete_tariff(callback: CallbackQuery, session: AsyncSession):
     await dal.delete_tariff(session, int(callback.data.split(":")[1]))
     tariffs = await dal.get_all_tariffs(session)
     await callback.answer("Удалён")
-    await _edit_or_answer(callback, "📦 <b>Тарифы</b>", reply_markup=tariff_list_kb(tariffs))
+    kb = tariff_list_kb(tariffs)
+    kb.inline_keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")])
+    kb.inline_keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")])
+    await _edit_or_answer(callback, "📦 <b>Тарифы</b>", reply_markup=kb)
 
 # ── Промокоды ─────────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "admin_promos")
@@ -682,10 +712,13 @@ async def admin_promos(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
         return
     promos = await dal.get_all_promos(session)
+    kb = promo_list_kb(promos)
+    kb.inline_keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")])
+    kb.inline_keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")])
     await _edit_or_answer(
         callback,
         f"🎟 <b>Промокоды ({len(promos)})</b>",
-        reply_markup=promo_list_kb(promos),
+        reply_markup=kb,
     )
 
 @router.callback_query(F.data == "admin_create_promo")
@@ -775,6 +808,7 @@ async def view_promo(callback: CallbackQuery, session: AsyncSession):
         )],
         [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_promo:{promo_id}")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_promos")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
     await _edit_or_answer(
         callback,
@@ -823,7 +857,8 @@ async def admin_inbounds(callback: CallbackQuery):
         lines.append(f"{status} <b>{ib.tag}</b> — {ib.type}\n<code>{ib.uuid}</code>")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔌 Хосты", callback_data="admin_hosts")],
-        back_btn()[0],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
     await _edit_or_answer(
         callback,
@@ -845,7 +880,8 @@ async def admin_hosts(callback: CallbackQuery):
         lines.append(f"{status} <b>{h.remark}</b>\n{h.address}:{h.port}")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔌 Инбаунды", callback_data="admin_inbounds")],
-        back_btn()[0],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
     await _edit_or_answer(
         callback,
@@ -862,10 +898,13 @@ async def admin_nodes(callback: CallbackQuery):
     if not nodes:
         await callback.answer("Ноды не найдены", show_alert=True)
         return
+    kb = nodes_kb(nodes)
+    kb.inline_keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")])
+    kb.inline_keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")])
     await _edit_or_answer(
         callback,
         f"📡 <b>Ноды ({len(nodes)})</b>",
-        reply_markup=nodes_kb(nodes),
+        reply_markup=kb,
     )
 
 @router.callback_query(F.data.startswith("node:"))
@@ -879,10 +918,13 @@ async def view_node(callback: CallbackQuery):
         await callback.answer("Нода не найдена", show_alert=True)
         return
     status = "🟢 Онлайн" if node.is_connected else "🔴 Офлайн"
+    kb = node_manage_kb(node_uuid)
+    kb.inline_keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_nodes")])
+    kb.inline_keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")])
     await _edit_or_answer(
         callback,
         f"📡 <b>{node.name}</b>\n\nСтатус: {status}\nАдрес: {node.address}\nUUID: <code>{node_uuid}</code>",
-        reply_markup=node_manage_kb(node_uuid),
+        reply_markup=kb,
     )
 
 @router.callback_query(F.data.startswith("restart_node:"))
@@ -903,24 +945,43 @@ async def toggle_maintenance(callback: CallbackQuery, session: AsyncSession):
     current = await dal.get_setting(session, "maintenance", "0")
     new_val = "0" if current == "1" else "1"
     await dal.set_setting(session, "maintenance", new_val)
+    
+    users = await dal.get_all_users(session, only_registered=True)
+    sent = 0
+    
     if new_val == "1":
-        users = await dal.get_all_users(session, only_registered=True)
-        sent = 0
+        # Уведомление о начале техработ
         for u in users:
             if u.telegram_id in settings.admin_ids:
                 continue
             try:
                 await callback.bot.send_message(
                     u.telegram_id,
-                    "🔧 <b>Технические работы</b>\n\nБот временно недоступен. Приносим извинения!",
+                    "🔧 <b>Технические работы</b>\n\n"
+                    "Сервис временно недоступен. Приносим извинения!",
                     parse_mode="HTML",
                 )
                 sent += 1
             except Exception:
                 pass
-        await callback.answer(f"🔴 Тех. работы. Уведомлено: {sent}", show_alert=True)
+        await callback.answer(f"🔴 Тех. работы начаты. Уведомлено: {sent}", show_alert=True)
     else:
-        await callback.answer("🟢 Тех. работы выключены", show_alert=True)
+        # Уведомление о завершении техработ
+        for u in users:
+            if u.telegram_id in settings.admin_ids:
+                continue
+            try:
+                await callback.bot.send_message(
+                    u.telegram_id,
+                    "✅ <b>Технические работы завершены</b>\n\n"
+                    "Сервис снова работает в обычном режиме. Спасибо за терпение!",
+                    parse_mode="HTML",
+                )
+                sent += 1
+            except Exception:
+                pass
+        await callback.answer(f"🟢 Тех. работы завершены. Уведомлено: {sent}", show_alert=True)
+    
     await callback.message.edit_reply_markup(
         reply_markup=admin_menu_kb(maintenance_on=new_val == "1")
     )
@@ -940,6 +1001,7 @@ async def admin_users(callback: CallbackQuery, session: AsyncSession):
     builder.button(text="🔍 Поиск", callback_data="admin_search_user")
     builder.button(text="🚫 Забаненные", callback_data="admin_banned_users")
     builder.button(text="◀️ Назад", callback_data="admin_menu")
+    builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
     await _edit_or_answer(
         callback,
@@ -987,6 +1049,7 @@ async def admin_banned_users(callback: CallbackQuery, session: AsyncSession):
             callback_data=f"admin_user:{u.telegram_id}",
         )
     builder.button(text="◀️ Назад", callback_data="admin_users")
+    builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
     header = f"🚫 <b>Забаненные ({len(users)})</b>" if users else "✅ Забаненных нет."
     await _edit_or_answer(callback, header, reply_markup=builder.as_markup())
@@ -1015,6 +1078,10 @@ async def view_user(callback: CallbackQuery, session: AsyncSession):
     slots_info = f"\n📱 Доп. слоты: {user.extra_device_slots}" if user.extra_device_slots else ""
     role_icon = {"developer": "👨‍💻", "admin": "🛡", "user": "👤"}.get(user.role, "👤")
 
+    kb = user_manage_kb(tg_id, user.is_banned, user.remnawave_uuid)
+    kb.inline_keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_users")])
+    kb.inline_keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")])
+
     await _edit_or_answer(
         callback,
         f"{role_icon} TG: <code>{tg_id}</code> | @{user.username or '—'}\n"
@@ -1025,7 +1092,7 @@ async def view_user(callback: CallbackQuery, session: AsyncSession):
         f"\n👥 Рефералов: {ref_count} (оплатили: {len(ref_paid)})"
         f"{referrer_info}\n"
         f"С: {user.created_at.strftime('%d.%m.%Y')}",
-        reply_markup=user_manage_kb(tg_id, user.is_banned, user.remnawave_uuid),
+        reply_markup=kb,
     )
 
 @router.callback_query(F.data.startswith("toggle_ban:"))
@@ -1073,6 +1140,7 @@ async def admin_assign_tariff_start(callback: CallbackQuery, session: AsyncSessi
             callback_data=f"do_assign_tariff:{tg_id}:{t.id}",
         )
     builder.button(text="◀️ Назад", callback_data=f"admin_user:{tg_id}")
+    builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
     await _edit_or_answer(
         callback,
@@ -1142,6 +1210,7 @@ async def admin_sub_manage(callback: CallbackQuery, session: AsyncSession):
         ],
         [InlineKeyboardButton(text="🗑 Удалить из панели", callback_data=f"admin_delete_sub:{tg_id}")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data=f"admin_user:{tg_id}")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
     await _edit_or_answer(
         callback,
@@ -1199,6 +1268,7 @@ async def admin_delete_sub(callback: CallbackQuery, session: AsyncSession):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"admin_delete_sub_confirm:{tg_id}")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin_sub_manage:{tg_id}")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
     await _edit_or_answer(
         callback,
@@ -1238,6 +1308,7 @@ async def admin_custom_buttons(callback: CallbackQuery, session: AsyncSession):
         )
     builder.button(text="➕ Добавить кнопку", callback_data="admin_add_custbtn")
     builder.button(text="◀️ Назад", callback_data="admin_menu")
+    builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
     await _edit_or_answer(
         callback,
@@ -1304,6 +1375,7 @@ async def view_custbtn(callback: CallbackQuery, session: AsyncSession):
         )],
         [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_custbtn:{btn_id}")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_custom_buttons")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
     await _edit_or_answer(
         callback,
@@ -1341,10 +1413,13 @@ async def delete_custbtn(callback: CallbackQuery, session: AsyncSession):
 async def admin_broadcast(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         return
+    kb = broadcast_target_kb()
+    kb.inline_keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")])
+    kb.inline_keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")])
     await _edit_or_answer(
         callback,
         "📢 <b>Рассылка</b>\n\nВыберите аудиторию:",
-        reply_markup=broadcast_target_kb(),
+        reply_markup=kb,
     )
 
 @router.callback_query(F.data.startswith("broadcast:"))
