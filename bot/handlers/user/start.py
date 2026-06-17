@@ -38,7 +38,7 @@ async def _get_menu_kb(session, tg_id: int, remnawave_uuid: str | None) -> Inlin
 
 def _welcome_text() -> str:
     return (
-        f"👋 Добро пожаловать в <b>{settings.BOT_NAME}</b>!\n\n"
+        f"👋 Главное меню <b>{settings.BOT_NAME}</b>!\n\n"
         f"Сервис для защиты соединения и обеспечения приватности в сети.\n"
         f"Выберите действие в меню ниже."
     )
@@ -52,7 +52,7 @@ async def _check_access(session, tg_id: int, action: str) -> tuple[bool, str]:
     if mode == "invite_only" and action == "register":
         return False, "🔒 Регистрация доступна только по реферальной ссылке."
     if mode == "no_purchase" and action == "purchase":
-        return False, "🚫 Покупки временно недоступны."
+        return False, " Покупки временно недоступны."
     if mode == "no_register" and action == "register":
         return False, "🔒 Регистрация новых пользователей временно закрыта."
     return True, " "
@@ -89,11 +89,16 @@ async def _edit_or_answer(callback: CallbackQuery, text: str, reply_markup=None,
 # ── /start ────────────────────────────────────────────────────────────────────
 @router.message(CommandStart())
 async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
+    # Сохраняем menu_message_id перед очисткой
+    data = await state.get_data()
+    old_menu_id = data.get("menu_message_id")
+    
     await state.clear()
+    
     tg_id = message.from_user.id
     maintenance = await dal.get_setting(session, "maintenance", "0")
     if maintenance == "1" and tg_id not in settings.admin_ids:
-        await message.answer("🔧 Ведутся технические работы. Попробуйте позже.")
+        await message.answer(" Ведутся технические работы. Попробуйте позже.")
         return
 
     referred_by = None
@@ -122,18 +127,48 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
     kb = await _get_menu_kb(session, tg_id, user.remnawave_uuid)
     text = _welcome_text()
 
-    if settings.WELCOME_IMAGE_URL:
+    menu_sent = False
+    msg = None
+
+    # Пробуем отредактировать старое сообщение (только для текстовых)
+    if old_menu_id and not settings.WELCOME_IMAGE_URL:
         try:
-            img = settings.WELCOME_IMAGE_URL
-            photo = (
-                img if img.startswith("http")
-                else __import__("aiogram.types", fromlist=["FSInputFile"]).FSInputFile(img)
+            await message.bot.edit_message_text(
+                text=text,
+                chat_id=message.chat.id,
+                message_id=old_menu_id,
+                parse_mode="HTML",
+                reply_markup=kb,
             )
-            await message.answer_photo(photo, caption=text, parse_mode="HTML", reply_markup=kb)
+            menu_sent = True
         except Exception:
-            await message.answer(text, parse_mode="HTML", reply_markup=kb)
-    else:
-        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+            pass
+
+    # Если не удалось отредактировать, отправляем новое
+    if not menu_sent:
+        if settings.WELCOME_IMAGE_URL:
+            try:
+                img = settings.WELCOME_IMAGE_URL
+                photo = (
+                    img if img.startswith("http")
+                    else __import__("aiogram.types", fromlist=["FSInputFile"]).FSInputFile(img)
+                )
+                msg = await message.answer_photo(photo, caption=text, parse_mode="HTML", reply_markup=kb)
+            except Exception:
+                msg = await message.answer(text, parse_mode="HTML", reply_markup=kb)
+        else:
+            msg = await message.answer(text, parse_mode="HTML", reply_markup=kb)
+        
+        # Удаляем предыдущее меню, если оно есть
+        if old_menu_id and msg and old_menu_id != msg.message_id:
+            try:
+                await message.bot.delete_message(chat_id=message.chat.id, message_id=old_menu_id)
+            except Exception:
+                pass
+        
+        # Сохраняем ID нового меню
+        if msg:
+            await state.update_data(menu_message_id=msg.message_id)
 
     if user.is_registered:
         return
@@ -190,7 +225,7 @@ async def _start_registration(message: Message, session: AsyncSession, state: FS
 async def process_username_input(message: Message, session: AsyncSession, state: FSMContext):
     username = message.text.strip().lstrip("@").lower()
     if not re.match(r'^[a-z0-9_]{3,32}$', username):
-        await message.answer("❌ От 3 до 32 символов: только латиница, цифры и _.")
+        await message.answer(" От 3 до 32 символов: только латиница, цифры и _.")
         return
     if await remnawave.username_exists(username):
         await message.answer(f"❌ Имя <code>{username}</code> уже занято.", parse_mode="HTML")
@@ -227,12 +262,12 @@ async def _profile_text_and_kb(session, tg_id: int):
                 expire_str = rw.expire_at.strftime("%d.%m.%Y")
                 used_gb = round(rw.user_traffic.used_traffic_bytes / 1024 ** 3, 2)
                 limit_gb = round(rw.traffic_limit_bytes / 1024 ** 3, 1) if rw.traffic_limit_bytes else "∞"
-                s_emoji = {"ACTIVE": "🟢", "EXPIRED": "🔴", "DISABLED": "⚫"}.get(rw.status.value, "⚪")
+                s_emoji = {"ACTIVE": "🟢", "EXPIRED": "🔴", "DISABLED": ""}.get(rw.status.value, "")
                 sub_info = (
                     f"\n\n<b>Подписка:</b>\n"
                     f"{s_emoji} Статус: {rw.status.value}\n"
-                    f"📅 До: {expire_str} ({days_left} дн.)\n"
-                    f"📊 Трафик: {used_gb} / {limit_gb} ГБ"
+                    f" До: {expire_str} ({days_left} дн.)\n"
+                    f" Трафик: {used_gb} / {limit_gb} ГБ"
                 )
         except Exception:
             sub_info = "\n\n⚠️ Не удалось получить данные подписки"
@@ -241,7 +276,7 @@ async def _profile_text_and_kb(session, tg_id: int):
     ref_paid = await dal.get_referrals_with_payment(session, tg_id)
 
     text = (
-        f"👤 <b>Личный кабинет</b>\n\n"
+        f" <b>Моя подписка</b>\n\n"
         f"🆔 ID: <code>{tg_id}</code>\n"
         f"👤 Аккаунт: <code>{user.remnawave_username}</code>"
         f"{sub_info}"
@@ -301,7 +336,7 @@ async def revoke_subscription_confirm(callback: CallbackQuery, session: AsyncSes
     await _edit_or_answer(callback,
         "✅ <b>Ссылка обновлена!</b>\n\nОбновите подписку во всех приложениях.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔗 Открыть новую подписку", url=rw.subscription_url)],
+            [InlineKeyboardButton(text=" Открыть новую подписку", url=rw.subscription_url)],
             [InlineKeyboardButton(text="◀️ Назад", callback_data="menu_profile")],
             [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
         ]),
@@ -415,7 +450,7 @@ async def menu_invite(callback: CallbackQuery, session: AsyncSession):
     ref_paid = await dal.get_referrals_with_payment(session, tg_id)
 
     bonus_text = (
-        f"\n🎁 За каждого оплатившего друга — <b>+{ref_days} дней</b>." if ref_days else ""
+        f"\n За каждого оплатившего друга — <b>+{ref_days} дней</b>." if ref_days else ""
     )
 
     await _edit_or_answer(callback,
@@ -430,7 +465,7 @@ async def menu_invite(callback: CallbackQuery, session: AsyncSession):
         ]),
     )
 
-# ── MTProto Proxy ─────────────────────────────────────────────────────────────
+# ─ Proxy для Telegram ─────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "menu_proxy")
 async def menu_proxy(callback: CallbackQuery, session: AsyncSession):
     user = await dal.get_user(session, callback.from_user.id)
@@ -454,10 +489,10 @@ async def menu_proxy(callback: CallbackQuery, session: AsyncSession):
         return
 
     await _edit_or_answer(callback,
-        "📡 <b>MTProto Proxy</b>\n\n"
+        "📡 <b>Proxy для Telegram</b>\n\n"
         "Нажмите кнопку чтобы подключить прокси в Telegram.\n\n"
         "⚠️ <b>Ссылка персональная.</b> Не передавайте её другим.\n\n"
-        "🔒 Деактивируется если подписка не оплачена более 5 дней.",
+        " Деактивируется если подписка не оплачена более 5 дней.",
         parse_mode="HTML",
         reply_markup=proxy_kb(link),
     )
@@ -469,19 +504,61 @@ async def menu_support(callback: CallbackQuery, session: AsyncSession, state: FS
     if not user or not user.is_registered:
         await callback.answer("Сначала зарегистрируйтесь — нажмите /start", show_alert=True)
         return
-    ticket = await dal.get_open_ticket(session, user.id)
-    if not ticket:
-        ticket = await dal.create_ticket(session, user.id)
-
+    
+    # Не создаём тикет сразу, только устанавливаем состояние
     await state.set_state(SupportSG.waiting_message)
-    await state.update_data(ticket_id=ticket.id)
-
+    
     await _edit_or_answer(callback,
-        f"💬 <b>Поддержка</b>\n\n"
-        f"Тикет #{ticket.id} открыт.\n"
+        f" <b>Поддержка</b>\n\n"
         f"Напишите ваш вопрос — ответим как можно скорее.\n\n"
-        f"Чтобы закрыть тикет — нажмите кнопку ниже.",
+        f"Тикет будет создан автоматически после вашего первого сообщения.",
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
+        ]),
+    )
+
+@router.message(SupportSG.waiting_message)
+async def support_message(message: Message, session: AsyncSession, state: FSMContext):
+    user = await dal.get_user(session, message.from_user.id)
+    if not user:
+        return
+    
+    # Проверяем, есть ли уже открытый тикет
+    ticket = await dal.get_open_ticket(session, user.id)
+    is_new_ticket = False
+    if not ticket:
+        # Создаём тикет только сейчас
+        ticket = await dal.create_ticket(session, user.id)
+        is_new_ticket = True
+    
+    # Добавляем сообщение в тикет
+    await dal.add_ticket_message(
+        session, ticket_id=ticket.id, sender_role="user",
+        sender_tg_id=message.from_user.id, text=message.text,
+    )
+    
+    # Сохраняем ticket_id в state
+    await state.update_data(ticket_id=ticket.id)
+    
+    # Уведомляем админов (только для нового тикета)
+    if is_new_ticket:
+        for admin_id in settings.admin_ids:
+            try:
+                await message.bot.send_message(
+                    admin_id,
+                    f"🎫 <b>Новый тикет #{ticket.id}</b>\n\n"
+                    f"👤 @{user.username or '—'} (<code>{user.telegram_id}</code>)\n"
+                    f"🆔 <code>{user.remnawave_username or '—'}</code>\n\n"
+                    f"<b>Сообщение:</b>\n{message.text}",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+    
+    await message.answer(
+        f"✅ Сообщение принято! Тикет #{ticket.id}.\n\n"
+        f"Ожидайте ответа поддержки.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data="close_my_ticket")],
             [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
@@ -492,6 +569,15 @@ async def menu_support(callback: CallbackQuery, session: AsyncSession, state: FS
 async def close_my_ticket(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
     data = await state.get_data()
     ticket_id = data.get("ticket_id")
+    
+    if not ticket_id:
+        # Если ticket_id нет в state, ищем открытый тикет
+        user = await dal.get_user(session, callback.from_user.id)
+        if user:
+            ticket = await dal.get_open_ticket(session, user.id)
+            if ticket:
+                ticket_id = ticket.id
+    
     if ticket_id:
         await dal.close_ticket(session, ticket_id)
         for admin_id in settings.admin_ids:
@@ -501,11 +587,12 @@ async def close_my_ticket(callback: CallbackQuery, session: AsyncSession, state:
                 pass
         await state.clear()
         await callback.answer("✅ Тикет закрыт")
+    
     user = await dal.get_user(session, callback.from_user.id)
     uuid = user.remnawave_uuid if user else None
     await _show_main_menu(callback, session, callback.from_user.id, uuid)
 
-# ── Inline-режим ──────────────────────────────────────────────────────────────
+# ─ Inline-режим ──────────────────────────────────────────────────────────────
 @router.inline_query(F.query.lower() == "invite")
 async def inline_invite(inline_query: InlineQuery):
     tg_id = inline_query.from_user.id
@@ -532,7 +619,7 @@ async def inline_invite(inline_query: InlineQuery):
     )
     await inline_query.answer([result], cache_time=30, is_personal=True)
 
-# ── Перехват неизвестных сообщений ────────────────────────────────────────────
+# ── Перехват неизвестных сообщений ───────────────────────────────────────────
 @router.message(F.text & ~F.text.startswith("/"))
 async def catch_unknown_text(message: Message, session: AsyncSession):
     try:
