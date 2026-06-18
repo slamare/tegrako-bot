@@ -1,9 +1,11 @@
 """Общие утилиты для хендлеров."""
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Optional
 
+from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message
 
 
@@ -15,9 +17,7 @@ async def edit_or_answer(
     reply_markup=None,
     parse_mode: str = "HTML",
 ):
-    """Универсальное редактирование: edit_caption для фото, edit_text для текста.
-    Если редактирование не удалось — отправляет новое сообщение.
-    """
+    """Универсальное редактирование: edit_caption для фото, edit_text для текста."""
     msg = callback.message
     try:
         if msg.photo:
@@ -33,12 +33,44 @@ async def edit_or_answer(
     await callback.answer()
 
 
-# ── Кэш последних сообщений меню (для борьбы со спамом /start) ────────────────
+# ── Middleware для автоудаления FSM-сообщений ──────────────────────────────────
+
+class FSMMessageCleanupMiddleware(BaseMiddleware):
+    """Автоматически удаляет сообщения пользователя через N секунд после FSM-обработки."""
+    
+    def __init__(self, delay: int = 30):
+        self.delay = delay
+    
+    async def __call__(self, handler, event, data):
+        from aiogram.fsm.context import FSMContext
+        
+        state = data.get("state")
+        should_cleanup = False
+        
+        if state and isinstance(event, Message):
+            current_state = await state.get_state()
+            if current_state is not None:
+                should_cleanup = True
+        
+        result = await handler(event, data)
+        
+        if should_cleanup:
+            asyncio.create_task(self._delete_later(event, self.delay))
+        
+        return result
+    
+    async def _delete_later(self, message: Message, delay: int):
+        await asyncio.sleep(delay)
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+
+# ── Кэш последних сообщений меню ─────────────────────────────────────────────
 
 class _MenuMessageCache:
-    """Хранит last message_id главного меню для каждого пользователя.
-    Чтобы при повторном /start бот редактировал старое сообщение, а не слал новое.
-    """
+    """Хранит message_id главного меню для каждого пользователя."""
 
     def __init__(self, ttl: int = 600):
         self._ttl = ttl
@@ -61,7 +93,7 @@ class _MenuMessageCache:
         self._data.pop(tg_id, None)
 
 
-menu_cache = _MenuMessageCache(ttl=600)  # 10 минут
+menu_cache = _MenuMessageCache(ttl=600)
 
 
 async def show_menu_message(
@@ -71,9 +103,7 @@ async def show_menu_message(
     parse_mode: str = "HTML",
     photo_url: str | None = None,
 ) -> Message:
-    """Показывает главное меню, редактируя предыдущее сообщение если возможно.
-    target — Message или CallbackQuery.
-    """
+    """Показывает главное меню, редактируя предыдущее сообщение если возможно."""
     tg_id = target.from_user.id
 
     if isinstance(target, CallbackQuery):
@@ -95,7 +125,6 @@ async def show_menu_message(
         menu_cache.set(tg_id, msg.message_id)
         return msg
 
-    # Message — пытаемся отредактировать предыдущее меню
     prev_id = menu_cache.get(tg_id)
     if prev_id:
         try:
@@ -119,7 +148,6 @@ async def show_menu_message(
                 pass
             menu_cache.delete(tg_id)
 
-    # Отправляем новое сообщение
     if photo_url:
         try:
             from aiogram.types import FSInputFile

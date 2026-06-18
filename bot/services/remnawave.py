@@ -299,7 +299,6 @@ async def get_subscription_info(uuid: str) -> Optional[UserInfo]:
     if cached is not None:
         return cached
 
-    # Защита от thundering herd: один запрос на uuid
     if uuid not in _sub_info_locks:
         _sub_info_locks[uuid] = asyncio.Lock()
 
@@ -377,7 +376,7 @@ async def add_user_to_default_squad(
     return await add_user_to_squad(user_uuid, squad_uuid)
 
 
-# ── HWID Devices ───────────────────────────────────────────────────────────
+# ── HWID Devices ──────────────────────────────────────────────────────────
 
 async def get_user_devices(user_uuid: str) -> list[HwidDevice]:
     try:

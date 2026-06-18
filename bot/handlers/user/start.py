@@ -18,13 +18,16 @@ from bot.keyboards.user_kb import (
     devices_kb, subscription_detail_kb, cancel_kb, remove_kb,
 )
 from bot.services import remnawave
-from bot.utils.helpers import edit_or_answer, show_menu_message, menu_cache
+from bot.utils.helpers import edit_or_answer, show_menu_message, menu_cache, FSMMessageCleanupMiddleware
 from config.settings import settings
 from db import dal
 
 router = Router()
 
-# Кэш для предотвращения спама уведомлениями "Для общения с поддержкой..." (TTL 30 сек)
+# Регистрируем middleware для автоудаления FSM-сообщений
+router.message.middleware(FSMMessageCleanupMiddleware(delay=30))
+
+# Кэш для предотвращения спама уведомлениями (TTL 30 сек)
 _notification_cache = TTLCache(maxsize=1000, ttl=30)
 
 
@@ -85,7 +88,7 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
     await state.clear()
     tg_id = message.from_user.id
 
-    # Удаляем reply-клавиатуру тихо, без создания нового сообщения
+    # Удаляем reply-клавиатуру
     try:
         await message.edit_reply_markup(
             reply_markup=ReplyKeyboardRemove(remove_keyboard=True)
@@ -93,7 +96,7 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
     except Exception:
         pass
 
-    # Удаляем саму команду /start из чата
+    # Удаляем саму команду /start
     try:
         await message.delete()
     except Exception:
@@ -131,7 +134,7 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
     text = _welcome_text()
     photo_url = settings.WELCOME_IMAGE_URL if settings.WELCOME_IMAGE_URL else None
 
-    # ГЛАВНОЕ ИСПРАВЛЕНИЕ: редактируем старое сообщение вместо отправки нового
+    # Показываем меню (редактирует старое сообщение если возможно)
     await show_menu_message(message, text, reply_markup=kb, photo_url=photo_url)
 
     if user.is_registered:
@@ -194,7 +197,7 @@ async def _start_registration(message: Message, session: AsyncSession, state: FS
 async def process_username_input(message: Message, session: AsyncSession, state: FSMContext):
     username = message.text.strip().lstrip("@").lower()
     if not re.match(r'^[a-z0-9_]{3,32}$', username):
-        await message.answer("❌ От 3 до 32 символов: только латиница, цифры и _.")
+        await message.answer(" От 3 до 32 символов: только латиница, цифры и _.")
         return
     if await remnawave.username_exists(username):
         await message.answer(f"❌ Имя <code>{username}</code> уже занято.", parse_mode="HTML")
@@ -233,7 +236,7 @@ async def _profile_text_and_kb(session, tg_id: int):
                 expire_str = rw.expire_at.strftime("%d.%m.%Y")
                 used_gb = round(rw.user_traffic.used_traffic_bytes / 1024 ** 3, 2)
                 limit_gb = round(rw.traffic_limit_bytes / 1024 ** 3, 1) if rw.traffic_limit_bytes else "∞"
-                s_emoji = {"ACTIVE": "🟢", "EXPIRED": "🔴", "DISABLED": "⚫"}.get(rw.status.value, "⚪")
+                s_emoji = {"ACTIVE": "🟢", "EXPIRED": "", "DISABLED": "⚫"}.get(rw.status.value, "⚪")
                 sub_info = (
                     f"\n\n<b>Подписка:</b>\n"
                     f"{s_emoji} Статус: {rw.status.value}\n"
@@ -249,7 +252,7 @@ async def _profile_text_and_kb(session, tg_id: int):
     text = (
         f"👤 <b>Управление подпиской</b>\n\n"
         f"🆔 ID: <code>{tg_id}</code>\n"
-        f"👤 Аккаунт: <code>{user.remnawave_username}</code>"
+        f" Аккаунт: <code>{user.remnawave_username}</code>"
         f"{sub_info}"
         f"\n\n👥 Рефералов: {ref_count} (оплатили: {len(ref_paid)})"
     )
@@ -293,7 +296,7 @@ async def revoke_subscription_prompt(callback: CallbackQuery):
         [InlineKeyboardButton(text="❌ Отмена", callback_data="my_subscription")],
     ])
     await edit_or_answer(callback,
-        "⚠️ <b>Подтвердите сброс ссылки</b>\n\n"
+        "️ <b>Подтвердите сброс ссылки</b>\n\n"
         "Старая ссылка перестанет работать. Нужно обновить её во всех приложениях.",
         reply_markup=kb,
     )
@@ -409,7 +412,7 @@ async def payment_history(callback: CallbackQuery, session: AsyncSession):
     payments = result.scalars().all()
     s_emoji = {"pending": "⏳", "approved": "✅", "rejected": "❌"}
     if not payments:
-        text = "💳 <b>История платежей</b>\n\nПлатежей пока нет."
+        text = " <b>История платежей</b>\n\nПлатежей пока нет."
     else:
         lines = ["💳 <b>История платежей:</b>\n"]
         for p in payments[:10]:
@@ -436,7 +439,7 @@ async def menu_invite(callback: CallbackQuery, session: AsyncSession):
     ref_count = await dal.count_referrals(session, tg_id)
     ref_paid = await dal.get_referrals_with_payment(session, tg_id)
     bonus_text = (
-        f"\n🎁 За каждого оплатившего друга — <b>+{ref_days} дней</b>. " if ref_days else ""
+        f"\n За каждого оплатившего друга — <b>+{ref_days} дней</b>. " if ref_days else ""
     )
 
     await edit_or_answer(callback,
@@ -493,7 +496,6 @@ async def menu_support(callback: CallbackQuery, session: AsyncSession, state: FS
     if not user or not user.is_registered:
         await callback.answer("Сначала зарегистрируйтесь — нажмите /start", show_alert=True)
         return
-    # Не создаём тикет сразу, только устанавливаем состояние
     await state.set_state(SupportSG.waiting_message)
 
     await edit_or_answer(callback,
@@ -512,24 +514,19 @@ async def support_message(message: Message, session: AsyncSession, state: FSMCon
     user = await dal.get_user(session, message.from_user.id)
     if not user:
         return
-    # Проверяем, есть ли уже открытый тикет
     ticket = await dal.get_open_ticket(session, user.id)
     is_new_ticket = False
     if not ticket:
-        # Создаём тикет только сейчас
         ticket = await dal.create_ticket(session, user.id)
         is_new_ticket = True
 
-    # Добавляем сообщение в тикет
     await dal.add_ticket_message(
         session, ticket_id=ticket.id, sender_role="user",
         sender_tg_id=message.from_user.id, text=message.text,
     )
 
-    # Сохраняем ticket_id в state
     await state.update_data(ticket_id=ticket.id)
 
-    # Уведомляем админов (только для нового тикета)
     if is_new_ticket:
         for admin_id in settings.admin_ids:
             try:
@@ -549,7 +546,7 @@ async def support_message(message: Message, session: AsyncSession, state: FSMCon
         f"Ожидайте ответа поддержки.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data="close_my_ticket")],
-            [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
+            [InlineKeyboardButton(text=" Меню", callback_data="main_menu")],
         ]),
     )
 
@@ -559,7 +556,6 @@ async def close_my_ticket(callback: CallbackQuery, session: AsyncSession, state:
     data = await state.get_data()
     ticket_id = data.get("ticket_id")
     if not ticket_id:
-        # Если ticket_id нет в state, ищем открытый тикет
         user = await dal.get_user(session, callback.from_user.id)
         if user:
             ticket = await dal.get_open_ticket(session, user.id)
@@ -595,7 +591,7 @@ async def inline_invite(inline_query: InlineQuery):
         "— Тогда выключи и включи.\n\n"
         f"Надоел этот ритуал? 🙃\n\n"
         f"{settings.BOT_NAME} — VPN, который работает без шаманских обрядов.\n\n"
-        "💻 Несколько устройств\n🌐 Безлимитный трафик\n⚡️ Быстрая скорость"
+        "💻 Несколько устройств\n🌐 Безлимитный трафик\n️ Быстрая скорость"
     )
     result = InlineQueryResultArticle(
         id="invite",
@@ -616,7 +612,13 @@ async def inline_invite(inline_query: InlineQuery):
     F.sticker | F.photo | F.video | F.document |
     F.audio | F.voice | F.video_note | F.animation
 )
-async def catch_unknown_text(message: Message, session: AsyncSession):
+async def catch_unknown_text(message: Message, session: AsyncSession, state: FSMContext):
+    # Проверяем, находится ли пользователь в FSM-состоянии
+    current_state = await state.get_state()
+    if current_state is not None:
+        # Пользователь в FSM-состоянии — пропускаем, пусть FSM-хендлеры работают
+        return
+
     tg_id = message.from_user.id
 
     # Удаляем сообщение пользователя
@@ -635,7 +637,7 @@ async def catch_unknown_text(message: Message, session: AsyncSession):
     sent_msg = await message.answer(
         "💬 Для общения с поддержкой откройте раздел через меню.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💬 Открыть поддержку", callback_data="menu_support")]
+            [InlineKeyboardButton(text=" Открыть поддержку", callback_data="menu_support")]
         ]),
     )
 
