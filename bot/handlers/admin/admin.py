@@ -5,8 +5,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
+
 from bot.states.states import AdminSG
 from bot.keyboards.admin_kb import (
     admin_menu_kb, payment_approve_kb, ticket_reply_kb,
@@ -15,44 +16,38 @@ from bot.keyboards.admin_kb import (
 )
 from bot.keyboards.user_kb import main_menu_kb
 from bot.services import remnawave
+from bot.utils.helpers import edit_or_answer
 from config.settings import settings
 from db import dal
 from db.models import Payment
 
 router = Router()
 
+
 def is_admin(tg_id: int) -> bool:
     return tg_id in settings.admin_ids
+
 
 # Универсальная клавиатура навигации для экранов, где нет специальной клавиатуры из admin_kb
 def admin_nav_kb(back_callback: str = "admin_menu") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀️ Назад", callback_data=back_callback)],
-        [InlineKeyboardButton(text=" Главное меню", callback_data="main_menu")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
 
-async def _edit_or_answer(callback: CallbackQuery, text: str, reply_markup=None, parse_mode: str = "HTML"):
-    """Универсальное редактирование: edit_caption для фото, edit_text для текста."""
-    msg = callback.message
-    try:
-        if msg.photo:
-            await msg.edit_caption(caption=text, parse_mode=parse_mode, reply_markup=reply_markup)
-        else:
-            await msg.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
-    except Exception:
-        await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
-    await callback.answer()
 
 # ── /admin ────────────────────────────────────────────────────────────────────
+
 @router.message(Command("admin"))
 async def admin_panel(message: Message, session: AsyncSession):
     if not is_admin(message.from_user.id):
         return
     maintenance = await dal.get_setting(session, "maintenance", "0")
     await message.answer(
-        "️ <b>Панель администратора</b>", parse_mode="HTML",
+        "⚙️ <b>Панель администратора</b>", parse_mode="HTML",
         reply_markup=admin_menu_kb(maintenance_on=maintenance == "1"),
     )
+
 
 @router.message(F.text == "⚙️ Администратор")
 async def admin_button(message: Message, session: AsyncSession):
@@ -64,18 +59,21 @@ async def admin_button(message: Message, session: AsyncSession):
         reply_markup=admin_menu_kb(maintenance_on=maintenance == "1"),
     )
 
+
 @router.callback_query(F.data == "admin_menu")
 async def admin_menu_cb(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
         return
     maintenance = await dal.get_setting(session, "maintenance", "0")
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         "⚙️ <b>Панель администратора</b>",
         reply_markup=admin_menu_kb(maintenance_on=maintenance == "1"),
     )
 
+
 # ── Статистика ────────────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "admin_stats")
 async def admin_stats(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
@@ -90,11 +88,10 @@ async def admin_stats(callback: CallbackQuery, session: AsyncSession):
         panel_text = f"\n\n<b>Ноды:</b> {nodes_online}/{len(nodes)} онлайн"
     except Exception:
         panel_text = "\n\n⚠️ Не удалось получить данные панели"
-    reset_at = await dal.get_setting(session, "revenue_reset_at", " ")
+    reset_at = await dal.get_setting(session, "revenue_reset_at", "")
     reset_note = f"\n<i>Выручка считается с {reset_at[:10]}</i>" if reset_at else ""
-
     text = (
-        f" <b>Статистика</b>\n\n"
+        f"📊 <b>Статистика</b>\n\n"
         f"👥 Всего: {users['total']} | Зарег.: {users['registered']} | Бан: {users['banned']}\n"
         f"⏳ Ожидают оплаты: {len(pending)}\n\n"
         f"<b>Выручка:</b>\n"
@@ -110,7 +107,8 @@ async def admin_stats(callback: CallbackQuery, session: AsyncSession):
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
-    await _edit_or_answer(callback, text, reply_markup=kb)
+    await edit_or_answer(callback, text, reply_markup=kb)
+
 
 @router.callback_query(F.data == "admin_reset_revenue")
 async def admin_reset_revenue(callback: CallbackQuery):
@@ -119,13 +117,14 @@ async def admin_reset_revenue(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да, сбросить", callback_data="admin_reset_revenue_confirm")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_stats")],
-        [InlineKeyboardButton(text=" Главное меню", callback_data="main_menu")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         "⚠️ <b>Сбросить статистику выручки?</b>\n\nСтатистика начнёт считаться заново с сегодняшнего дня.",
         reply_markup=kb,
     )
+
 
 @router.callback_query(F.data == "admin_reset_revenue_confirm")
 async def admin_reset_revenue_confirm(callback: CallbackQuery, session: AsyncSession):
@@ -134,6 +133,7 @@ async def admin_reset_revenue_confirm(callback: CallbackQuery, session: AsyncSes
     await dal.set_setting(session, "revenue_reset_at", datetime.utcnow().isoformat())
     await callback.answer("✅ Выручка сброшена", show_alert=True)
     await admin_stats(callback, session)
+
 
 @router.callback_query(F.data == "admin_set_ref_days")
 async def admin_set_ref_days(callback: CallbackQuery, state: FSMContext):
@@ -146,6 +146,7 @@ async def admin_set_ref_days(callback: CallbackQuery, state: FSMContext):
         parse_mode="HTML",
     )
     await callback.answer()
+
 
 @router.message(AdminSG.set_referral_days)
 async def save_referral_days(message: Message, session: AsyncSession, state: FSMContext):
@@ -161,7 +162,9 @@ async def save_referral_days(message: Message, session: AsyncSession, state: FSM
     await state.clear()
     await message.answer(f"✅ Бонус за реферала: <b>{days} дн.</b>", parse_mode="HTML")
 
+
 # ── Режимы доступа ────────────────────────────────────────────────────────────
+
 ACCESS_MODE_LABELS = {
     "open": "🟢 Открытый доступ",
     "closed": "🔴 Полное ограничение",
@@ -169,6 +172,7 @@ ACCESS_MODE_LABELS = {
     "no_purchase": "🚫 Запрет покупок",
     "no_register": "🔒 Запрет регистрации",
 }
+
 ACCESS_MODE_DESC = {
     "open": "Бот работает в обычном режиме.",
     "closed": "Все пользователи получают сообщение о недоступности.",
@@ -177,19 +181,21 @@ ACCESS_MODE_DESC = {
     "no_register": "Регистрация закрыта, существующие пользователи работают.",
 }
 
+
 @router.callback_query(F.data == "admin_access_mode")
 async def admin_access_mode(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
         return
     current = await dal.get_setting(session, "access_mode", "open")
     label = ACCESS_MODE_LABELS.get(current, current)
-    desc = ACCESS_MODE_DESC.get(current, " ")
+    desc = ACCESS_MODE_DESC.get(current, "")
     # access_mode_kb уже содержит кнопки Назад и Главное меню
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"🔐 <b>Режим доступа</b>\n\nТекущий: <b>{label}</b>\n<i>{desc}</i>\n\nВыберите новый режим:",
         reply_markup=access_mode_kb(current),
     )
+
 
 @router.callback_query(F.data.startswith("set_access_mode:"))
 async def set_access_mode(callback: CallbackQuery, session: AsyncSession):
@@ -203,20 +209,22 @@ async def set_access_mode(callback: CallbackQuery, session: AsyncSession):
     await callback.answer(f"✅ {ACCESS_MODE_LABELS[mode]}", show_alert=True)
     await admin_access_mode(callback, session)
 
+
 # ── Платежи ──────────────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "admin_pending_payments")
 async def admin_pending_payments(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
         return
     payments = await dal.get_pending_payments(session)
     if not payments:
-        await _edit_or_answer(
+        await edit_or_answer(
             callback,
             "✅ Нет ожидающих оплат.",
             reply_markup=admin_nav_kb(),
         )
         return
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"⏳ Ожидающих: {len(payments)}. Карточки ниже 👇",
         reply_markup=admin_nav_kb(),
@@ -225,7 +233,7 @@ async def admin_pending_payments(callback: CallbackQuery, session: AsyncSession)
         u, t = p.user, p.tariff
         text = (
             f"💳 <b>Оплата #{p.id}</b>\n"
-            f" @{u.username or '—'} (<code>{u.telegram_id}</code>)\n"
+            f"@{u.username or '—'} (<code>{u.telegram_id}</code>)\n"
             f"🆔 <code>{u.remnawave_username or '—'}</code>\n"
             f"📦 {t.name if t else '?'} | 💰 {int(p.amount)} ₽ | {p.payment_method or '—'}"
         )
@@ -237,6 +245,7 @@ async def admin_pending_payments(callback: CallbackQuery, session: AsyncSession)
         else:
             await callback.message.answer(text, parse_mode="HTML", reply_markup=payment_approve_kb(p.id))
 
+
 @router.callback_query(F.data.startswith("approve:"))
 async def approve_payment(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
@@ -247,7 +256,6 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
         .where(Payment.id == payment_id)
     )
     payment = result.scalar_one_or_none()
-
     if not payment or payment.status != "pending":
         await callback.answer("Платёж уже обработан", show_alert=True)
         return
@@ -328,17 +336,18 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
         # Обновляем само сообщение с оплатой
         if callback.message.photo:
             await callback.message.edit_caption(
-                caption=(callback.message.caption or "") + "\n\n✅ <b>ПОДТВЕРЖДЕНО</b>", 
+                caption=(callback.message.caption or "") + "\n\n✅ <b>ПОДТВЕРЖДЕНО</b>",
                 parse_mode="HTML"
             )
         else:
             await callback.message.edit_text(
-                (callback.message.text or "") + "\n\n✅ <b>ПОДТВЕРЖДЕНО</b>", 
+                (callback.message.text or "") + "\n\n✅ <b>ПОДТВЕРЖДЕНО</b>",
                 parse_mode="HTML"
             )
         await callback.answer("✅ Подтверждено")
     except Exception as e:
         await callback.answer(f"Ошибка: {str(e)[:100]}", show_alert=True)
+
 
 @router.callback_query(F.data.startswith("reject:"))
 async def reject_payment(callback: CallbackQuery, session: AsyncSession):
@@ -350,7 +359,6 @@ async def reject_payment(callback: CallbackQuery, session: AsyncSession):
         .where(Payment.id == payment_id)
     )
     payment = result.scalar_one_or_none()
-
     if not payment or payment.status != "pending":
         await callback.answer("Платёж уже обработан", show_alert=True)
         return
@@ -361,20 +369,22 @@ async def reject_payment(callback: CallbackQuery, session: AsyncSession):
         "❌ <b>Оплата отклонена.</b>\nЕсли считаете ошибкой — обратитесь в поддержку.",
         parse_mode="HTML",
     )
-    
+
     if callback.message.photo:
         await callback.message.edit_caption(
-            caption=(callback.message.caption or "") + "\n\n❌ <b>ОТКЛОНЕНО</b>", 
+            caption=(callback.message.caption or "") + "\n\n❌ <b>ОТКЛОНЕНО</b>",
             parse_mode="HTML"
         )
     else:
         await callback.message.edit_text(
-            (callback.message.text or "") + "\n\n❌ <b>ОТКЛОНЕНО</b>", 
+            (callback.message.text or "") + "\n\n❌ <b>ОТКЛОНЕНО</b>",
             parse_mode="HTML"
         )
     await callback.answer("❌ Отклонено")
 
+
 # ── Тикеты ────────────────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "admin_tickets")
 async def admin_tickets(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
@@ -388,10 +398,11 @@ async def admin_tickets(callback: CallbackQuery, session: AsyncSession):
         )
     builder.button(text="📁 Закрытые тикеты", callback_data="admin_closed_tickets")
     builder.button(text="◀️ Назад", callback_data="admin_menu")
-    builder.button(text=" Главное меню", callback_data="main_menu")
+    builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
-    header = f" <b>Открытые тикеты: {len(tickets)}</b>" if tickets else "✅ Открытых тикетов нет."
-    await _edit_or_answer(callback, header, reply_markup=builder.as_markup())
+    header = f"📋 <b>Открытые тикеты: {len(tickets)}</b>" if tickets else "✅ Открытых тикетов нет."
+    await edit_or_answer(callback, header, reply_markup=builder.as_markup())
+
 
 @router.callback_query(F.data == "admin_closed_tickets")
 async def admin_closed_tickets(callback: CallbackQuery, session: AsyncSession):
@@ -409,7 +420,8 @@ async def admin_closed_tickets(callback: CallbackQuery, session: AsyncSession):
     builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
     header = f"📁 <b>Закрытые тикеты (последние {len(tickets)})</b>"
-    await _edit_or_answer(callback, header, reply_markup=builder.as_markup())
+    await edit_or_answer(callback, header, reply_markup=builder.as_markup())
+
 
 @router.callback_query(F.data.startswith("view_ticket:"))
 async def view_ticket(callback: CallbackQuery, session: AsyncSession):
@@ -428,7 +440,7 @@ async def view_ticket(callback: CallbackQuery, session: AsyncSession):
     )
     status_icon = "🟢" if ticket.status == "open" else "🔒"
     # ticket_reply_kb уже содержит кнопки Назад и Главное меню
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"🎫 <b>Тикет #{ticket_id}</b> {status_icon}\n"
         f"@{u.username or '—'} (<code>{u.telegram_id}</code>)\n"
@@ -436,6 +448,7 @@ async def view_ticket(callback: CallbackQuery, session: AsyncSession):
         f"<b>Последние сообщения:</b>\n{history or 'нет'}",
         reply_markup=ticket_reply_kb(ticket_id, is_closed=ticket.status == "closed"),
     )
+
 
 @router.callback_query(F.data.startswith("reply_ticket:"))
 async def reply_ticket_start(callback: CallbackQuery, state: FSMContext):
@@ -446,6 +459,7 @@ async def reply_ticket_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(ticket_id=ticket_id)
     await callback.message.answer(f"✏️ Введите ответ на тикет #{ticket_id}:")
     await callback.answer()
+
 
 @router.message(AdminSG.replying_ticket)
 async def send_ticket_reply(message: Message, session: AsyncSession, state: FSMContext):
@@ -471,6 +485,7 @@ async def send_ticket_reply(message: Message, session: AsyncSession, state: FSMC
         await message.answer("⚠️ Не удалось доставить сообщение.")
     await state.clear()
 
+
 @router.callback_query(F.data.startswith("close_ticket:"))
 async def close_ticket(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
@@ -488,25 +503,27 @@ async def close_ticket(callback: CallbackQuery, session: AsyncSession):
         )
     except Exception:
         pass
-    
     if callback.message.photo:
         await callback.message.edit_caption(
             caption=(callback.message.caption or "") + "\n\n🔒 <b>Закрыт</b>", parse_mode="HTML"
         )
     else:
         await callback.message.edit_text(
-            (callback.message.text or "") + "\n\n <b>Закрыт</b>", parse_mode="HTML"
+            (callback.message.text or "") + "\n\n🔒 <b>Закрыт</b>", parse_mode="HTML"
         )
     await callback.answer("Закрыт")
 
+
 # ── Тарифы ────────────────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "admin_tariffs")
 async def admin_tariffs(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
         return
     tariffs = await dal.get_all_tariffs(session)
     # tariff_list_kb уже содержит кнопки Назад и Главное меню
-    await _edit_or_answer(callback, " <b>Тарифы</b>", reply_markup=tariff_list_kb(tariffs))
+    await edit_or_answer(callback, "<b>Тарифы</b>", reply_markup=tariff_list_kb(tariffs))
+
 
 @router.callback_query(F.data.startswith("admin_tariff:"))
 async def view_tariff(callback: CallbackQuery, session: AsyncSession):
@@ -525,7 +542,7 @@ async def view_tariff(callback: CallbackQuery, session: AsyncSession):
     else:
         type_info = "\n📦 Тип: Обычный"
     # tariff_manage_kb уже содержит кнопки Назад и Главное меню
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"📦 <b>{t.name}</b>\n{t.description or ''}\n"
         f"⏱ {t.duration_days} дн. | 📊 {traffic} | "
@@ -535,6 +552,7 @@ async def view_tariff(callback: CallbackQuery, session: AsyncSession):
         reply_markup=tariff_manage_kb(t.id, t.is_active, t.is_trial, t.is_referral),
     )
 
+
 @router.callback_query(F.data == "admin_create_tariff")
 async def create_tariff_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -543,17 +561,20 @@ async def create_tariff_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("📦 Создание тарифа\n\nВведите <b>название</b>:", parse_mode="HTML")
     await callback.answer()
 
+
 @router.message(AdminSG.tariff_name)
 async def tariff_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text.strip())
     await state.set_state(AdminSG.tariff_description)
     await message.answer("Введите <b>описание</b> (или '-' пропустить):", parse_mode="HTML")
 
+
 @router.message(AdminSG.tariff_description)
 async def tariff_description(message: Message, state: FSMContext):
     await state.update_data(description=None if message.text.strip() == "-" else message.text.strip())
     await state.set_state(AdminSG.tariff_days)
     await message.answer("Введите <b>количество дней</b>:", parse_mode="HTML")
+
 
 @router.message(AdminSG.tariff_days)
 async def tariff_days(message: Message, state: FSMContext):
@@ -567,6 +588,7 @@ async def tariff_days(message: Message, state: FSMContext):
     await state.set_state(AdminSG.tariff_traffic)
     await message.answer("Введите <b>лимит трафика ГБ</b> (0 = безлимит):", parse_mode="HTML")
 
+
 @router.message(AdminSG.tariff_traffic)
 async def tariff_traffic(message: Message, state: FSMContext):
     try:
@@ -578,6 +600,7 @@ async def tariff_traffic(message: Message, state: FSMContext):
     await state.update_data(traffic_limit_gb=gb)
     await state.set_state(AdminSG.tariff_devices)
     await message.answer("Введите <b>лимит устройств</b> (0 = безлимит):", parse_mode="HTML")
+
 
 @router.message(AdminSG.tariff_devices)
 async def tariff_devices(message: Message, state: FSMContext):
@@ -591,6 +614,7 @@ async def tariff_devices(message: Message, state: FSMContext):
     await state.set_state(AdminSG.tariff_price)
     await message.answer("Введите <b>цену</b> в рублях:", parse_mode="HTML")
 
+
 @router.message(AdminSG.tariff_price)
 async def tariff_price(message: Message, state: FSMContext):
     try:
@@ -603,6 +627,7 @@ async def tariff_price(message: Message, state: FSMContext):
     await state.set_state(AdminSG.tariff_squad)
     await message.answer("Введите <b>UUID сквада</b> (или '-' для дефолтного):", parse_mode="HTML")
 
+
 @router.message(AdminSG.tariff_squad)
 async def tariff_squad(message: Message, state: FSMContext):
     text = message.text.strip()
@@ -613,6 +638,7 @@ async def tariff_squad(message: Message, state: FSMContext):
         "Отправьте <b>да</b> или <b>нет</b>.",
         parse_mode="HTML",
     )
+
 
 @router.message(AdminSG.tariff_trial)
 async def tariff_trial(message: Message, state: FSMContext):
@@ -625,6 +651,7 @@ async def tariff_trial(message: Message, state: FSMContext):
         parse_mode="HTML",
     )
 
+
 @router.message(AdminSG.tariff_referral)
 async def tariff_referral(message: Message, session: AsyncSession, state: FSMContext):
     is_referral = message.text.strip().lower() in ("да", "yes", "1", "true", "+")
@@ -633,11 +660,12 @@ async def tariff_referral(message: Message, session: AsyncSession, state: FSMCon
     t = await dal.create_tariff(session, **data)
     await state.clear()
     squad_info = f"сквад: {data.get('squad_uuid')}" if data.get("squad_uuid") else "дефолтный сквад"
-    badge = " |  Триальный" if data.get("is_trial") else (" | 👥 Реферальный" if is_referral else "")
+    badge = " | 🎁 Триальный" if data.get("is_trial") else (" | 👥 Реферальный" if is_referral else "")
     await message.answer(
         f"✅ Тариф <b>{t.name}</b> создан! {t.duration_days} дн. | {int(t.price)} ₽ | {squad_info}{badge}",
         parse_mode="HTML",
     )
+
 
 @router.callback_query(F.data.startswith("toggle_tariff:"))
 async def toggle_tariff(callback: CallbackQuery, session: AsyncSession):
@@ -655,6 +683,7 @@ async def toggle_tariff(callback: CallbackQuery, session: AsyncSession):
         reply_markup=tariff_manage_kb(tariff_id, t.is_active, t.is_trial, t.is_referral)
     )
 
+
 @router.callback_query(F.data.startswith("toggle_trial:"))
 async def toggle_trial(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
@@ -665,12 +694,13 @@ async def toggle_trial(callback: CallbackQuery, session: AsyncSession):
         await callback.answer("Не найден", show_alert=True)
         return
     await dal.update_tariff(session, tariff_id, is_trial=not t.is_trial)
-    label = "🎁 Триальный включён" if not t.is_trial else " Триал снят"
+    label = "🎁 Триальный включён" if not t.is_trial else "🎁 Триал снят"
     await callback.answer(label, show_alert=True)
     t = await dal.get_tariff(session, tariff_id)
     await callback.message.edit_reply_markup(
         reply_markup=tariff_manage_kb(tariff_id, t.is_active, t.is_trial, t.is_referral)
     )
+
 
 @router.callback_query(F.data.startswith("toggle_referral:"))
 async def toggle_referral(callback: CallbackQuery, session: AsyncSession):
@@ -689,6 +719,7 @@ async def toggle_referral(callback: CallbackQuery, session: AsyncSession):
         reply_markup=tariff_manage_kb(tariff_id, t.is_active, t.is_trial, t.is_referral)
     )
 
+
 @router.callback_query(F.data.startswith("delete_tariff:"))
 async def delete_tariff(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
@@ -696,20 +727,23 @@ async def delete_tariff(callback: CallbackQuery, session: AsyncSession):
     await dal.delete_tariff(session, int(callback.data.split(":")[1]))
     tariffs = await dal.get_all_tariffs(session)
     await callback.answer("Удалён")
-    await _edit_or_answer(callback, "📦 <b>Тарифы</b>", reply_markup=tariff_list_kb(tariffs))
+    await edit_or_answer(callback, "📦 <b>Тарифы</b>", reply_markup=tariff_list_kb(tariffs))
+
 
 # ── Промокоды ─────────────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "admin_promos")
 async def admin_promos(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
         return
     promos = await dal.get_all_promos(session)
     # promo_list_kb уже содержит кнопки Назад и Главное меню
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"🎟 <b>Промокоды ({len(promos)})</b>",
         reply_markup=promo_list_kb(promos),
     )
+
 
 @router.callback_query(F.data == "admin_create_promo")
 async def create_promo_start(callback: CallbackQuery, state: FSMContext):
@@ -722,10 +756,11 @@ async def create_promo_start(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
+
 @router.message(AdminSG.promo_code)
 async def promo_code(message: Message, state: FSMContext):
     code = message.text.strip().upper()
-    if not code.replace("_", "").replace("-", "").isalnum():
+    if not code.replace("_", " ").replace("-", " ").isalnum():
         await message.answer("❌ Только латиница, цифры, дефис и подчёркивание:")
         return
     await state.update_data(code=code)
@@ -736,6 +771,7 @@ async def promo_code(message: Message, state: FSMContext):
         "• Фиксированная сумма: <b>100</b>",
         parse_mode="HTML",
     )
+
 
 @router.message(AdminSG.promo_discount)
 async def promo_discount(message: Message, state: FSMContext):
@@ -759,6 +795,7 @@ async def promo_discount(message: Message, state: FSMContext):
     await state.set_state(AdminSG.promo_max_uses)
     await message.answer("Введите <b>максимальное количество использований</b>:", parse_mode="HTML")
 
+
 @router.message(AdminSG.promo_max_uses)
 async def promo_max_uses(message: Message, session: AsyncSession, state: FSMContext):
     try:
@@ -777,6 +814,7 @@ async def promo_max_uses(message: Message, session: AsyncSession, state: FSMCont
         f"Скидка: {disc} | Использований: 0/{uses}",
         parse_mode="HTML",
     )
+
 
 @router.callback_query(F.data.startswith("admin_promo:"))
 async def view_promo(callback: CallbackQuery, session: AsyncSession):
@@ -800,7 +838,7 @@ async def view_promo(callback: CallbackQuery, session: AsyncSession):
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_promos")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"🎟 <b>{promo.code}</b>\n"
         f"Скидка: {disc}\n"
@@ -809,6 +847,7 @@ async def view_promo(callback: CallbackQuery, session: AsyncSession):
         f"Статус: {status}",
         reply_markup=kb,
     )
+
 
 @router.callback_query(F.data.startswith("toggle_promo:"))
 async def toggle_promo(callback: CallbackQuery, session: AsyncSession):
@@ -824,13 +863,13 @@ async def toggle_promo(callback: CallbackQuery, session: AsyncSession):
     await callback.answer("Статус обновлён")
     await view_promo(callback, session)
 
+
 @router.callback_query(F.data.startswith("delete_promo:"))
 async def delete_promo(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
         return
-        
     promo_id = int(callback.data.split(":")[1])
-    
+
     # Сначала очищаем ссылки в payments
     await session.execute(
         update(Payment)
@@ -838,14 +877,16 @@ async def delete_promo(callback: CallbackQuery, session: AsyncSession):
         .values(promo_id=None)
     )
     await session.flush()
-    
+
     # Теперь удаляем промокод
     await dal.delete_promo(session, promo_id)
-    
+
     await callback.answer("✅ Промокод удалён")
     await admin_promos(callback, session)
 
+
 # ── Инбаунды и хосты ──────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "admin_inbounds")
 async def admin_inbounds(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -863,11 +904,12 @@ async def admin_inbounds(callback: CallbackQuery):
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"🔌 <b>Инбаунды ({len(inbounds)})</b>\n\n" + "\n\n".join(lines),
         reply_markup=kb,
     )
+
 
 @router.callback_query(F.data == "admin_hosts")
 async def admin_hosts(callback: CallbackQuery):
@@ -886,13 +928,15 @@ async def admin_hosts(callback: CallbackQuery):
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"🌐 <b>Хосты ({len(hosts)})</b>\n\n" + "\n\n".join(lines),
         reply_markup=kb,
     )
 
+
 # ── Ноды ─────────────────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "admin_nodes")
 async def admin_nodes(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -902,11 +946,12 @@ async def admin_nodes(callback: CallbackQuery):
         await callback.answer("Ноды не найдены", show_alert=True)
         return
     # nodes_kb уже содержит кнопки Назад и Главное меню
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"📡 <b>Ноды ({len(nodes)})</b>",
         reply_markup=nodes_kb(nodes),
     )
+
 
 @router.callback_query(F.data.startswith("node:"))
 async def view_node(callback: CallbackQuery):
@@ -920,11 +965,12 @@ async def view_node(callback: CallbackQuery):
         return
     status = "🟢 Онлайн" if node.is_connected else "🔴 Офлайн"
     # node_manage_kb уже содержит кнопки Назад и Главное меню
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"📡 <b>{node.name}</b>\n\nСтатус: {status}\nАдрес: {node.address}\nUUID: <code>{node_uuid}</code>",
         reply_markup=node_manage_kb(node_uuid),
     )
+
 
 @router.callback_query(F.data.startswith("restart_node:"))
 async def restart_node(callback: CallbackQuery):
@@ -936,7 +982,9 @@ async def restart_node(callback: CallbackQuery):
         "🔄 Нода перезагружается..." if ok else "❌ Ошибка перезагрузки", show_alert=True
     )
 
+
 # ── Тех. работы ───────────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "admin_toggle_maintenance")
 async def toggle_maintenance(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
@@ -944,10 +992,9 @@ async def toggle_maintenance(callback: CallbackQuery, session: AsyncSession):
     current = await dal.get_setting(session, "maintenance", "0")
     new_val = "0" if current == "1" else "1"
     await dal.set_setting(session, "maintenance", new_val)
-    
     users = await dal.get_all_users(session, only_registered=True)
     sent = 0
-    
+
     if new_val == "1":
         # Уведомление о начале техработ
         for u in users:
@@ -978,13 +1025,15 @@ async def toggle_maintenance(callback: CallbackQuery, session: AsyncSession):
             except Exception:
                 pass
         await callback.answer(f"🟢 Тех. работы завершены. Уведомлено: {sent}", show_alert=True)
-    
+
     # admin_menu_kb уже содержит кнопку Главное меню
     await callback.message.edit_reply_markup(
         reply_markup=admin_menu_kb(maintenance_on=new_val == "1")
     )
 
+
 # ── Пользователи ──────────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "admin_users")
 async def admin_users(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
@@ -997,23 +1046,25 @@ async def admin_users(callback: CallbackQuery, session: AsyncSession):
             callback_data=f"admin_user:{u.telegram_id}",
         )
     builder.button(text="🔍 Поиск", callback_data="admin_search_user")
-    builder.button(text=" Забаненные", callback_data="admin_banned_users")
+    builder.button(text="🚫 Забаненные", callback_data="admin_banned_users")
     builder.button(text="◀️ Назад", callback_data="admin_menu")
     builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"👥 <b>Пользователи ({len(users)})</b>",
         reply_markup=builder.as_markup(),
     )
+
 
 @router.callback_query(F.data == "admin_search_user")
 async def admin_search_user_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         return
     await state.set_state(AdminSG.search_user)
-    await callback.message.answer(" Введите username, имя аккаунта или Telegram ID:")
+    await callback.message.answer("Введите username, имя аккаунта или Telegram ID:")
     await callback.answer()
+
 
 @router.message(AdminSG.search_user)
 async def admin_search_user(message: Message, session: AsyncSession, state: FSMContext):
@@ -1035,6 +1086,7 @@ async def admin_search_user(message: Message, session: AsyncSession, state: FSMC
         f"🔍 Найдено: {len(users)}", reply_markup=builder.as_markup()
     )
 
+
 @router.callback_query(F.data == "admin_banned_users")
 async def admin_banned_users(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
@@ -1050,7 +1102,8 @@ async def admin_banned_users(callback: CallbackQuery, session: AsyncSession):
     builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
     header = f"🚫 <b>Забаненные ({len(users)})</b>" if users else "✅ Забаненных нет."
-    await _edit_or_answer(callback, header, reply_markup=builder.as_markup())
+    await edit_or_answer(callback, header, reply_markup=builder.as_markup())
+
 
 @router.callback_query(F.data.startswith("admin_user:"))
 async def view_user(callback: CallbackQuery, session: AsyncSession):
@@ -1074,10 +1127,9 @@ async def view_user(callback: CallbackQuery, session: AsyncSession):
     ref_paid = await dal.get_referrals_with_payment(session, tg_id)
     referrer_info = f"\nПривёл: <code>{user.referred_by}</code>" if user.referred_by else ""
     slots_info = f"\n📱 Доп. слоты: {user.extra_device_slots}" if user.extra_device_slots else ""
-    role_icon = {"developer": "👨💻", "admin": "🛡", "user": "👤"}.get(user.role, "👤")
-
+    role_icon = {"developer": "👨‍💻", "admin": "🛡", "user": "👤"}.get(user.role, "👤")
     # user_manage_kb уже содержит кнопки Назад и Главное меню
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"{role_icon} TG: <code>{tg_id}</code> | @{user.username or '—'}\n"
         f"Аккаунт: <code>{user.remnawave_username or '—'}</code>\n"
@@ -1090,6 +1142,7 @@ async def view_user(callback: CallbackQuery, session: AsyncSession):
         reply_markup=user_manage_kb(tg_id, user.is_banned, user.remnawave_uuid),
     )
 
+
 @router.callback_query(F.data.startswith("toggle_ban:"))
 async def toggle_ban(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
@@ -1101,10 +1154,11 @@ async def toggle_ban(callback: CallbackQuery, session: AsyncSession):
         return
     new_ban = not user.is_banned
     await dal.update_user(session, tg_id, is_banned=new_ban)
-    await callback.answer(f"{' Забанен' if new_ban else '✅ Разбанен'}", show_alert=True)
+    await callback.answer(f"{'🚫 Забанен' if new_ban else '✅ Разбанен'}", show_alert=True)
     await callback.message.edit_reply_markup(
         reply_markup=user_manage_kb(tg_id, new_ban, user.remnawave_uuid)
     )
+
 
 @router.callback_query(F.data.startswith("admin_grant_unlimited:"))
 async def admin_grant_unlimited(callback: CallbackQuery, session: AsyncSession):
@@ -1118,9 +1172,11 @@ async def admin_grant_unlimited(callback: CallbackQuery, session: AsyncSession):
     expire = datetime(2099, 12, 31, 16, 59, 59, tzinfo=timezone.utc)
     ok = await remnawave.set_expire_at(user.remnawave_uuid, expire)
     if ok:
+        remnawave.invalidate_sub_info_cache(user.remnawave_uuid)
         await callback.answer("✅ Бессрочный доступ выдан до 31.12.2099", show_alert=True)
     else:
         await callback.answer("❌ Ошибка API", show_alert=True)
+
 
 @router.callback_query(F.data.startswith("admin_assign_tariff:"))
 async def admin_assign_tariff_start(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
@@ -1134,14 +1190,15 @@ async def admin_assign_tariff_start(callback: CallbackQuery, session: AsyncSessi
             text=f"{t.name} — {t.duration_days} дн.",
             callback_data=f"do_assign_tariff:{tg_id}:{t.id}",
         )
-    builder.button(text="️ Назад", callback_data=f"admin_user:{tg_id}")
+    builder.button(text="◀️ Назад", callback_data=f"admin_user:{tg_id}")
     builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         "📦 Выберите тариф для назначения:",
         reply_markup=builder.as_markup(),
     )
+
 
 @router.callback_query(F.data.startswith("do_assign_tariff:"))
 async def do_assign_tariff(callback: CallbackQuery, session: AsyncSession):
@@ -1167,6 +1224,7 @@ async def do_assign_tariff(callback: CallbackQuery, session: AsyncSession):
                 telegram_id=tg_id,
             )
             await dal.update_user(session, tg_id, remnawave_uuid=str(rw_user.uuid))
+        remnawave.invalidate_sub_info_cache(user.remnawave_uuid)
         await callback.answer(f"✅ Тариф {tariff.name} назначен", show_alert=True)
         try:
             await callback.bot.send_message(
@@ -1178,6 +1236,7 @@ async def do_assign_tariff(callback: CallbackQuery, session: AsyncSession):
             pass
     except Exception as e:
         await callback.answer(f"Ошибка: {str(e)[:100]}", show_alert=True)
+
 
 @router.callback_query(F.data.startswith("admin_sub_manage:"))
 async def admin_sub_manage(callback: CallbackQuery, session: AsyncSession):
@@ -1207,7 +1266,7 @@ async def admin_sub_manage(callback: CallbackQuery, session: AsyncSession):
         [InlineKeyboardButton(text="◀️ Назад", callback_data=f"admin_user:{tg_id}")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"📋 <b>Подписка пользователя</b>\n\n"
         f"Статус: {rw.status.value}\n"
@@ -1216,6 +1275,7 @@ async def admin_sub_manage(callback: CallbackQuery, session: AsyncSession):
         f"Устройств: {rw.hwid_device_limit}",
         reply_markup=kb,
     )
+
 
 @router.callback_query(F.data.startswith("admin_reset_traffic:"))
 async def admin_reset_traffic(callback: CallbackQuery, session: AsyncSession):
@@ -1227,7 +1287,10 @@ async def admin_reset_traffic(callback: CallbackQuery, session: AsyncSession):
         await callback.answer("Подписка не найдена", show_alert=True)
         return
     ok = await remnawave.reset_user_traffic(user.remnawave_uuid)
+    if ok:
+        remnawave.invalidate_sub_info_cache(user.remnawave_uuid)
     await callback.answer("✅ Трафик сброшен" if ok else "❌ Ошибка", show_alert=True)
+
 
 @router.callback_query(F.data.startswith("admin_toggle_sub:"))
 async def admin_toggle_sub(callback: CallbackQuery, session: AsyncSession):
@@ -1245,11 +1308,12 @@ async def admin_toggle_sub(callback: CallbackQuery, session: AsyncSession):
     new_status = "DISABLED" if rw.status.value == "ACTIVE" else "ACTIVE"
     ok = await remnawave.set_user_status(user.remnawave_uuid, new_status)
     await callback.answer(
-        f"{' Подписка отключена' if new_status == 'DISABLED' else '✅ Подписка включена'}",
+        f"{'⛔ Подписка отключена' if new_status == 'DISABLED' else '✅ Подписка включена'}",
         show_alert=True,
     )
     if ok:
         await admin_sub_manage(callback, session)
+
 
 @router.callback_query(F.data.startswith("admin_delete_sub:"))
 async def admin_delete_sub(callback: CallbackQuery, session: AsyncSession):
@@ -1265,11 +1329,12 @@ async def admin_delete_sub(callback: CallbackQuery, session: AsyncSession):
         [InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin_sub_manage:{tg_id}")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         "⚠️ <b>Удалить пользователя из панели?</b>\n\nПодписка и все данные будут удалены из Remnawave.",
         reply_markup=kb,
     )
+
 
 @router.callback_query(F.data.startswith("admin_delete_sub_confirm:"))
 async def admin_delete_sub_confirm(callback: CallbackQuery, session: AsyncSession):
@@ -1282,13 +1347,16 @@ async def admin_delete_sub_confirm(callback: CallbackQuery, session: AsyncSessio
         return
     ok = await remnawave.delete_panel_user(user.remnawave_uuid)
     if ok:
+        remnawave.invalidate_sub_info_cache(user.remnawave_uuid)
         await dal.update_user(session, tg_id, remnawave_uuid=None)
         await callback.answer("✅ Удалено из панели", show_alert=True)
         await view_user(callback, session)
     else:
         await callback.answer("❌ Ошибка удаления", show_alert=True)
 
+
 # ── Кастомные кнопки меню ─────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "admin_custom_buttons")
 async def admin_custom_buttons(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
@@ -1305,12 +1373,13 @@ async def admin_custom_buttons(callback: CallbackQuery, session: AsyncSession):
     builder.button(text="◀️ Назад", callback_data="admin_menu")
     builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"🔘 <b>Кастомные кнопки ({len(buttons)})</b>\n\n"
         f"Кнопки показываются пользователям как inline-блок после приветствия.",
         reply_markup=builder.as_markup(),
     )
+
 
 @router.callback_query(F.data == "admin_add_custbtn")
 async def admin_add_custbtn(callback: CallbackQuery, state: FSMContext):
@@ -1320,11 +1389,13 @@ async def admin_add_custbtn(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("Введите <b>текст кнопки</b>:", parse_mode="HTML")
     await callback.answer()
 
+
 @router.message(AdminSG.custbtn_text)
 async def custbtn_text(message: Message, state: FSMContext):
     await state.update_data(btn_text=message.text.strip())
     await state.set_state(AdminSG.custbtn_url)
     await message.answer("Введите <b>URL</b> (можно tg://...):", parse_mode="HTML")
+
 
 @router.message(AdminSG.custbtn_url)
 async def custbtn_url(message: Message, state: FSMContext):
@@ -1335,6 +1406,7 @@ async def custbtn_url(message: Message, state: FSMContext):
         [InlineKeyboardButton(text="✅ Только с активной подпиской", callback_data="custbtn_cond:active_sub")],
     ])
     await message.answer("Кому показывать кнопку?", reply_markup=kb)
+
 
 @router.callback_query(F.data.startswith("custbtn_cond:"))
 async def custbtn_condition(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
@@ -1347,11 +1419,12 @@ async def custbtn_condition(callback: CallbackQuery, session: AsyncSession, stat
         url=data["btn_url"],
         condition=condition,
     )
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"✅ Кнопка <b>{btn.text}</b> добавлена.",
         reply_markup=admin_nav_kb("admin_custom_buttons"),
     )
+
 
 @router.callback_query(F.data.startswith("admin_custbtn:"))
 async def view_custbtn(callback: CallbackQuery, session: AsyncSession):
@@ -1373,7 +1446,7 @@ async def view_custbtn(callback: CallbackQuery, session: AsyncSession):
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_custom_buttons")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         f"🔘 <b>{btn.text}</b>\n"
         f"URL: <code>{btn.url}</code>\n"
@@ -1381,6 +1454,7 @@ async def view_custbtn(callback: CallbackQuery, session: AsyncSession):
         f"Статус: {'✅ Активна' if btn.is_active else '❌ Скрыта'}",
         reply_markup=kb,
     )
+
 
 @router.callback_query(F.data.startswith("toggle_custbtn:"))
 async def toggle_custbtn(callback: CallbackQuery, session: AsyncSession):
@@ -1396,6 +1470,7 @@ async def toggle_custbtn(callback: CallbackQuery, session: AsyncSession):
     await callback.answer("Статус обновлён")
     await view_custbtn(callback, session)
 
+
 @router.callback_query(F.data.startswith("delete_custbtn:"))
 async def delete_custbtn(callback: CallbackQuery, session: AsyncSession):
     if not is_admin(callback.from_user.id):
@@ -1404,17 +1479,20 @@ async def delete_custbtn(callback: CallbackQuery, session: AsyncSession):
     await callback.answer("Удалено")
     await admin_custom_buttons(callback, session)
 
+
 # ── Рассылка ──────────────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         return
     # broadcast_target_kb уже содержит кнопки Назад и Главное меню
-    await _edit_or_answer(
+    await edit_or_answer(
         callback,
         "📢 <b>Рассылка</b>\n\nВыберите аудиторию:",
         reply_markup=broadcast_target_kb(),
     )
+
 
 @router.callback_query(F.data.startswith("broadcast:"))
 async def broadcast_target_cb(callback: CallbackQuery, state: FSMContext):
@@ -1424,6 +1502,7 @@ async def broadcast_target_cb(callback: CallbackQuery, state: FSMContext):
     await state.update_data(broadcast_target=callback.data.split(":")[1])
     await callback.message.answer("✏️ Введите текст рассылки (поддерживается HTML):")
     await callback.answer()
+
 
 @router.message(AdminSG.broadcast_text)
 async def send_broadcast(message: Message, session: AsyncSession, state: FSMContext):
@@ -1439,7 +1518,7 @@ async def send_broadcast(message: Message, session: AsyncSession, state: FSMCont
         if target in ("active", "expired") and u.remnawave_uuid:
             try:
                 rw = await remnawave.get_subscription_info(u.remnawave_uuid)
-                status = rw.status.value if rw else " "
+                status = rw.status.value if rw else ""
                 if target == "active" and status != "ACTIVE":
                     continue
                 if target == "expired" and status == "ACTIVE":

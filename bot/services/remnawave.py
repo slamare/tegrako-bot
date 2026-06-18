@@ -1,11 +1,14 @@
 """
 Клиент Remnawave через httpx напрямую.
 """
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from dataclasses import dataclass
 
 import httpx
+from cachetools import TTLCache
+
 from config.settings import settings
 
 
@@ -23,9 +26,11 @@ def _url(path: str) -> str:
 class UserTraffic:
     used_traffic_bytes: int
 
+
 @dataclass
 class UserStatus:
     value: str
+
 
 @dataclass
 class UserInfo:
@@ -39,12 +44,14 @@ class UserInfo:
     hwid_device_limit: int
     telegram_id: Optional[int]
 
+
 @dataclass
 class NodeInfo:
     uuid: str
     name: str
     address: str
     is_connected: bool
+
 
 @dataclass
 class HwidDevice:
@@ -56,11 +63,13 @@ class HwidDevice:
     user_agent: Optional[str]
     created_at: str
 
+
 @dataclass
 class SquadInfo:
     uuid: str
     name: str
     members_count: int
+
 
 @dataclass
 class InboundInfo:
@@ -68,6 +77,7 @@ class InboundInfo:
     tag: str
     type: str
     is_enabled: bool
+
 
 @dataclass
 class HostInfo:
@@ -93,6 +103,20 @@ def _parse_user(u: dict) -> UserInfo:
         hwid_device_limit=u.get("hwidDeviceLimit", 0),
         telegram_id=u.get("telegramId"),
     )
+
+
+# ── Кэш для get_subscription_info ─────────────────────────────────────────
+
+_sub_info_cache: TTLCache = TTLCache(maxsize=500, ttl=45)
+_sub_info_locks: dict[str, asyncio.Lock] = {}
+
+
+def invalidate_sub_info_cache(uuid: str | None = None):
+    """Сбросить кэш подписки. Если uuid=None — сбросить весь кэш."""
+    if uuid is None:
+        _sub_info_cache.clear()
+    else:
+        _sub_info_cache.pop(uuid, None)
 
 
 # ── Users ──────────────────────────────────────────────────────────────────
@@ -174,7 +198,9 @@ async def extend_subscription(uuid: str, duration_days: int) -> UserInfo:
         resp.raise_for_status()
         data = resp.json()
         u = data.get("response", data)
-        return _parse_user(u)
+        result = _parse_user(u)
+    invalidate_sub_info_cache(uuid)
+    return result
 
 
 async def set_expire_at(uuid: str, expire_at: datetime) -> Optional[UserInfo]:
@@ -190,7 +216,9 @@ async def set_expire_at(uuid: str, expire_at: datetime) -> Optional[UserInfo]:
             resp.raise_for_status()
             data = resp.json()
             u = data.get("response", data)
-            return _parse_user(u)
+            result = _parse_user(u)
+        invalidate_sub_info_cache(uuid)
+        return result
     except Exception:
         return None
 
@@ -212,7 +240,9 @@ async def update_user_limits(
             resp.raise_for_status()
             data = resp.json()
             u = data.get("response", data)
-            return _parse_user(u)
+            result = _parse_user(u)
+        invalidate_sub_info_cache(uuid)
+        return result
     except Exception:
         return None
 
@@ -226,7 +256,9 @@ async def set_user_status(uuid: str, status: str) -> Optional[UserInfo]:
             resp.raise_for_status()
             data = resp.json()
             u = data.get("response", data)
-            return _parse_user(u)
+            result = _parse_user(u)
+        invalidate_sub_info_cache(uuid)
+        return result
     except Exception:
         return None
 
@@ -236,7 +268,10 @@ async def delete_panel_user(uuid: str) -> bool:
     try:
         async with httpx.AsyncClient(verify=True) as client:
             resp = await client.delete(_url(f"/users/{uuid}"), headers=_headers(), timeout=10)
-            return resp.status_code in (200, 204)
+            ok = resp.status_code in (200, 204)
+        if ok:
+            invalidate_sub_info_cache(uuid)
+        return ok
     except Exception:
         return False
 
@@ -250,13 +285,33 @@ async def reset_user_traffic(uuid: str) -> bool:
                 headers=_headers(),
                 timeout=10,
             )
-            return resp.status_code in (200, 201)
+            ok = resp.status_code in (200, 201)
+        if ok:
+            invalidate_sub_info_cache(uuid)
+        return ok
     except Exception:
         return False
 
 
 async def get_subscription_info(uuid: str) -> Optional[UserInfo]:
-    return await get_user_by_uuid(uuid)
+    """Получить информацию о подписке с кэшированием (TTL 45 сек)."""
+    cached = _sub_info_cache.get(uuid)
+    if cached is not None:
+        return cached
+
+    # Защита от thundering herd: один запрос на uuid
+    if uuid not in _sub_info_locks:
+        _sub_info_locks[uuid] = asyncio.Lock()
+
+    async with _sub_info_locks[uuid]:
+        cached = _sub_info_cache.get(uuid)
+        if cached is not None:
+            return cached
+
+        result = await get_user_by_uuid(uuid)
+        if result is not None:
+            _sub_info_cache[uuid] = result
+        return result
 
 
 async def revoke_subscription(uuid: str) -> Optional[UserInfo]:
@@ -271,7 +326,9 @@ async def revoke_subscription(uuid: str) -> Optional[UserInfo]:
                 return None
             data = resp.json()
             u = data.get("response", data)
-            return _parse_user(u)
+            result = _parse_user(u)
+        invalidate_sub_info_cache(uuid)
+        return result
     except Exception:
         return None
 
@@ -414,7 +471,6 @@ async def get_inbounds() -> list[InboundInfo]:
             resp = await client.get(_url("/inbounds"), headers=_headers(), timeout=10)
             data = resp.json()
             raw = data.get("response", [])
-            # response может быть списком или словарём с ключом
             if isinstance(raw, dict):
                 raw = raw.get("inbounds", [])
             return [

@@ -10,22 +10,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import re
 import asyncio
 from datetime import datetime, timezone
+
 from bot.states.states import RegistrationSG, SupportSG
 from bot.keyboards.user_kb import (
     main_menu_kb, back_kb, nav_kb, profile_kb, proxy_kb,
     devices_kb, subscription_detail_kb, cancel_kb, remove_kb,
 )
 from bot.services import remnawave
+from bot.utils.helpers import edit_or_answer, show_menu_message, menu_cache
 from config.settings import settings
 from db import dal
 
 router = Router()
 
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
 def _has_active_proxy_access(rw) -> bool:
     if not rw or rw.status.value != "ACTIVE":
         return False
     return (rw.expire_at - datetime.now(timezone.utc)).days > 5
+
 
 async def _get_menu_kb(session, tg_id: int, remnawave_uuid: str | None) -> InlineKeyboardMarkup:
     is_adm = tg_id in settings.admin_ids
@@ -38,6 +43,7 @@ async def _get_menu_kb(session, tg_id: int, remnawave_uuid: str | None) -> Inlin
             pass
     return main_menu_kb(is_admin=is_adm, show_proxy=show_proxy)
 
+
 def _welcome_text() -> str:
     return (
         f"👋 Главное меню\n\n"
@@ -45,9 +51,10 @@ def _welcome_text() -> str:
         f"Выберите действие в меню ниже."
     )
 
+
 async def _check_access(session, tg_id: int, action: str) -> tuple[bool, str]:
     if tg_id in settings.admin_ids:
-        return True, " "
+        return True, ""
     mode = await dal.get_setting(session, "access_mode", "open")
     if mode == "closed":
         return False, "🔧 Сервис временно недоступен. Попробуйте позже."
@@ -57,48 +64,31 @@ async def _check_access(session, tg_id: int, action: str) -> tuple[bool, str]:
         return False, "🚫 Покупки временно недоступны."
     if mode == "no_register" and action == "register":
         return False, "🔒 Регистрация новых пользователей временно закрыта."
-    return True, " "
+    return True, ""
+
 
 async def _show_main_menu(target, session, tg_id: int, remnawave_uuid: str | None):
     """Показывает или редактирует главное меню. target — Message или CallbackQuery."""
     kb = await _get_menu_kb(session, tg_id, remnawave_uuid)
     text = _welcome_text()
-    if isinstance(target, CallbackQuery):
-        msg = target.message
-        try:
-            if msg.photo:
-                await msg.edit_caption(caption=text, parse_mode="HTML", reply_markup=kb)
-            else:
-                await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
-        except Exception:
-            await msg.answer(text, parse_mode="HTML", reply_markup=kb)
-        await target.answer()
-    else:
-        await target.answer(text, parse_mode="HTML", reply_markup=kb)
+    await show_menu_message(target, text, reply_markup=kb)
 
-async def _edit_or_answer(callback: CallbackQuery, text: str, reply_markup=None, parse_mode: str = "HTML"):
-    """Универсальное редактирование: edit_caption для фото, edit_text для текста."""
-    msg = callback.message
-    try:
-        if msg.photo:
-            await msg.edit_caption(caption=text, parse_mode=parse_mode, reply_markup=reply_markup)
-        else:
-            await msg.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
-    except Exception:
-        await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
-    await callback.answer()
 
 # ── /start ────────────────────────────────────────────────────────────────────
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
-    # Удаляем reply-клавиатуру если она есть
-    await message.answer(
-        "⏳ Загрузка...",
-        reply_markup=ReplyKeyboardRemove(remove_keyboard=True)
-    )
     await state.clear()
-    
     tg_id = message.from_user.id
+
+    # Удаляем reply-клавиатуру тихо, без создания нового сообщения
+    try:
+        await message.edit_reply_markup(
+            reply_markup=ReplyKeyboardRemove(remove_keyboard=True)
+        )
+    except Exception:
+        pass
+
     maintenance = await dal.get_setting(session, "maintenance", "0")
     if maintenance == "1" and tg_id not in settings.admin_ids:
         await message.answer("🔧 Ведутся технические работы. Попробуйте позже.")
@@ -129,19 +119,10 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
 
     kb = await _get_menu_kb(session, tg_id, user.remnawave_uuid)
     text = _welcome_text()
+    photo_url = settings.WELCOME_IMAGE_URL if settings.WELCOME_IMAGE_URL else None
 
-    if settings.WELCOME_IMAGE_URL:
-        try:
-            img = settings.WELCOME_IMAGE_URL
-            photo = (
-                img if img.startswith("http")
-                else __import__("aiogram.types", fromlist=["FSInputFile"]).FSInputFile(img)
-            )
-            await message.answer_photo(photo, caption=text, parse_mode="HTML", reply_markup=kb)
-        except Exception:
-            await message.answer(text, parse_mode="HTML", reply_markup=kb)
-    else:
-        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    # ГЛАВНОЕ ИСПРАВЛЕНИЕ: редактируем старое сообщение вместо отправки нового
+    await show_menu_message(message, text, reply_markup=kb, photo_url=photo_url)
 
     if user.is_registered:
         return
@@ -164,7 +145,9 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
 
     await _start_registration(message, session, state)
 
+
 # ── Главное меню (callback) ───────────────────────────────────────────────────
+
 @router.callback_query(F.data == "main_menu")
 async def main_menu_cb(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
     await state.clear()
@@ -172,7 +155,9 @@ async def main_menu_cb(callback: CallbackQuery, session: AsyncSession, state: FS
     uuid = user.remnawave_uuid if user else None
     await _show_main_menu(callback, session, callback.from_user.id, uuid)
 
+
 # ── Регистрация ──────────────────────────────────────────────────────────────
+
 async def _start_registration(message: Message, session: AsyncSession, state: FSMContext):
     tg_username = message.from_user.username
     if tg_username:
@@ -194,6 +179,7 @@ async def _start_registration(message: Message, session: AsyncSession, state: FS
         )
     await state.set_state(RegistrationSG.choose_username)
 
+
 @router.message(RegistrationSG.choose_username)
 async def process_username_input(message: Message, session: AsyncSession, state: FSMContext):
     username = message.text.strip().lstrip("@").lower()
@@ -209,6 +195,7 @@ async def process_username_input(message: Message, session: AsyncSession, state:
     await _finish_registration(message, session, username, message.from_user.id)
     await state.clear()
 
+
 async def _finish_registration(message: Message, session: AsyncSession, username: str, tg_id: int):
     await dal.update_user(session, tg_id, remnawave_username=username, is_registered=True)
     kb = main_menu_kb(is_admin=tg_id in settings.admin_ids)
@@ -218,14 +205,15 @@ async def _finish_registration(message: Message, session: AsyncSession, username
         reply_markup=kb,
     )
 
+
 # ── Профиль ───────────────────────────────────────────────────────────────────
+
 async def _profile_text_and_kb(session, tg_id: int):
     user = await dal.get_user(session, tg_id)
     if not user or not user.is_registered:
         return None, None
     has_sub = bool(user.remnawave_uuid)
-    sub_info = " "
-
+    sub_info = ""
     if has_sub:
         try:
             rw = await remnawave.get_subscription_info(user.remnawave_uuid)
@@ -257,15 +245,18 @@ async def _profile_text_and_kb(session, tg_id: int):
     )
     return text, profile_kb(has_sub)
 
+
 @router.callback_query(F.data == "menu_profile")
 async def menu_profile(callback: CallbackQuery, session: AsyncSession):
     text, kb = await _profile_text_and_kb(session, callback.from_user.id)
     if not text:
         await callback.answer("Сначала зарегистрируйтесь — нажмите /start", show_alert=True)
         return
-    await _edit_or_answer(callback, text, reply_markup=kb)
+    await edit_or_answer(callback, text, reply_markup=kb)
+
 
 # ── Подписка ──────────────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "my_subscription")
 async def my_subscription(callback: CallbackQuery, session: AsyncSession):
     user = await dal.get_user(session, callback.from_user.id)
@@ -276,7 +267,7 @@ async def my_subscription(callback: CallbackQuery, session: AsyncSession):
     if not rw:
         await callback.answer("Не удалось получить данные", show_alert=True)
         return
-    await _edit_or_answer(callback,
+    await edit_or_answer(callback,
         f"📋 <b>Ваша подписка</b>\n\n"
         f"Нажмите кнопку ниже чтобы открыть ссылку подключения.\n\n"
         f"⚠️ <b>Сброс ссылки</b> — сгенерирует новую. Старая перестанет работать.",
@@ -284,17 +275,19 @@ async def my_subscription(callback: CallbackQuery, session: AsyncSession):
         reply_markup=subscription_detail_kb(rw.subscription_url),
     )
 
+
 @router.callback_query(F.data == "revoke_subscription")
 async def revoke_subscription_prompt(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да, сбросить", callback_data="revoke_subscription_confirm")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="my_subscription")],
     ])
-    await _edit_or_answer(callback,
+    await edit_or_answer(callback,
         "⚠️ <b>Подтвердите сброс ссылки</b>\n\n"
         "Старая ссылка перестанет работать. Нужно обновить её во всех приложениях.",
         reply_markup=kb,
     )
+
 
 @router.callback_query(F.data == "revoke_subscription_confirm")
 async def revoke_subscription_confirm(callback: CallbackQuery, session: AsyncSession):
@@ -306,7 +299,11 @@ async def revoke_subscription_confirm(callback: CallbackQuery, session: AsyncSes
     if not rw:
         await callback.answer("Ошибка при сбросе ссылки", show_alert=True)
         return
-    await _edit_or_answer(callback,
+
+    # Сбрасываем кэш подписки
+    remnawave.invalidate_sub_info_cache(user.remnawave_uuid)
+
+    await edit_or_answer(callback,
         "✅ <b>Ссылка обновлена!</b>\n\nОбновите подписку во всех приложениях.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔗 Открыть новую подписку", url=rw.subscription_url)],
@@ -315,7 +312,9 @@ async def revoke_subscription_confirm(callback: CallbackQuery, session: AsyncSes
         ]),
     )
 
+
 # ── Устройства ────────────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "my_devices")
 async def my_devices(callback: CallbackQuery, session: AsyncSession):
     user = await dal.get_user(session, callback.from_user.id)
@@ -327,7 +326,6 @@ async def my_devices(callback: CallbackQuery, session: AsyncSession):
     limit = rw.hwid_device_limit if rw else 0
     limit_str = "∞" if not limit else str(limit)
     show_buy = settings.DEVICE_SLOT_PRICE > 0
-
     text = f"📱 <b>Мои устройства</b> ({len(devices)}/{limit_str})\n\n"
     if devices:
         for i, d in enumerate(devices, 1):
@@ -337,7 +335,8 @@ async def my_devices(callback: CallbackQuery, session: AsyncSession):
     else:
         text += "Устройств не зарегистрировано."
 
-    await _edit_or_answer(callback, text, reply_markup=devices_kb(devices, show_buy_slot=show_buy))
+    await edit_or_answer(callback, text, reply_markup=devices_kb(devices, show_buy_slot=show_buy))
+
 
 @router.callback_query(F.data.startswith("delete_device:"))
 async def delete_device(callback: CallbackQuery, session: AsyncSession):
@@ -353,17 +352,19 @@ async def delete_device(callback: CallbackQuery, session: AsyncSession):
     else:
         await callback.answer("❌ Ошибка при удалении", show_alert=True)
 
+
 @router.callback_query(F.data == "delete_all_devices")
 async def delete_all_devices_prompt(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да, удалить все", callback_data="delete_all_devices_confirm")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="my_devices")],
     ])
-    await _edit_or_answer(callback,
+    await edit_or_answer(callback,
         "⚠️ <b>Удалить все устройства?</b>\n\n"
         "После этого нужно заново авторизоваться на всех устройствах.",
         reply_markup=kb,
     )
+
 
 @router.callback_query(F.data == "delete_all_devices_confirm")
 async def delete_all_devices(callback: CallbackQuery, session: AsyncSession):
@@ -378,7 +379,9 @@ async def delete_all_devices(callback: CallbackQuery, session: AsyncSession):
     else:
         await callback.answer("❌ Ошибка при удалении", show_alert=True)
 
+
 # ── История платежей ──────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "payment_history")
 async def payment_history(callback: CallbackQuery, session: AsyncSession):
     user = await dal.get_user(session, callback.from_user.id)
@@ -409,10 +412,11 @@ async def payment_history(callback: CallbackQuery, session: AsyncSession):
                 f"{int(p.amount)} ₽ ({tariff_name})"
             )
         text = "\n".join(lines)
+    await edit_or_answer(callback, text, reply_markup=nav_kb("menu_profile"))
 
-    await _edit_or_answer(callback, text, reply_markup=nav_kb("menu_profile"))
 
 # ── Реферальная программа ─────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "menu_invite")
 async def menu_invite(callback: CallbackQuery, session: AsyncSession):
     tg_id = callback.from_user.id
@@ -421,12 +425,11 @@ async def menu_invite(callback: CallbackQuery, session: AsyncSession):
     ref_days = int(await dal.get_setting(session, "referral_days", "0"))
     ref_count = await dal.count_referrals(session, tg_id)
     ref_paid = await dal.get_referrals_with_payment(session, tg_id)
-
     bonus_text = (
-        f"\n🎁 За каждого оплатившего друга — <b>+{ref_days} дней</b>." if ref_days else ""
+        f"\n🎁 За каждого оплатившего друга — <b>+{ref_days} дней</b>. " if ref_days else ""
     )
 
-    await _edit_or_answer(callback,
+    await edit_or_answer(callback,
         f"👥 <b>Реферальная программа</b>\n\n"
         f"Ваша ссылка:\n<code>{link}</code>"
         f"{bonus_text}\n\n"
@@ -438,7 +441,9 @@ async def menu_invite(callback: CallbackQuery, session: AsyncSession):
         ]),
     )
 
+
 # ── Proxy для Telegram ─────────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "menu_proxy")
 async def menu_proxy(callback: CallbackQuery, session: AsyncSession):
     user = await dal.get_user(session, callback.from_user.id)
@@ -452,7 +457,6 @@ async def menu_proxy(callback: CallbackQuery, session: AsyncSession):
             show_alert=True,
         )
         return
-
     from bot.services import telemt as telemt_svc
     link = await telemt_svc.get_proxy_link(user.remnawave_username)
     if not link:
@@ -461,7 +465,7 @@ async def menu_proxy(callback: CallbackQuery, session: AsyncSession):
         await callback.answer("Не удалось получить ссылку.", show_alert=True)
         return
 
-    await _edit_or_answer(callback,
+    await edit_or_answer(callback,
         "📡 <b>Proxy для Telegram</b>\n\n"
         "Нажмите кнопку чтобы подключить прокси в Telegram.\n\n"
         "⚠️ <b>Ссылка персональная.</b> Не передавайте её другим.\n\n"
@@ -470,18 +474,19 @@ async def menu_proxy(callback: CallbackQuery, session: AsyncSession):
         reply_markup=proxy_kb(link),
     )
 
+
 # ── Поддержка (вход через меню) ───────────────────────────────────────────────
+
 @router.callback_query(F.data == "menu_support")
 async def menu_support(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
     user = await dal.get_user(session, callback.from_user.id)
     if not user or not user.is_registered:
         await callback.answer("Сначала зарегистрируйтесь — нажмите /start", show_alert=True)
         return
-    
     # Не создаём тикет сразу, только устанавливаем состояние
     await state.set_state(SupportSG.waiting_message)
-    
-    await _edit_or_answer(callback,
+
+    await edit_or_answer(callback,
         f"💬 <b>Поддержка</b>\n\n"
         f"Напишите ваш вопрос — ответим как можно скорее.\n\n"
         f"Тикет будет создан автоматически после вашего первого сообщения.",
@@ -491,12 +496,12 @@ async def menu_support(callback: CallbackQuery, session: AsyncSession, state: FS
         ]),
     )
 
+
 @router.message(SupportSG.waiting_message)
 async def support_message(message: Message, session: AsyncSession, state: FSMContext):
     user = await dal.get_user(session, message.from_user.id)
     if not user:
         return
-    
     # Проверяем, есть ли уже открытый тикет
     ticket = await dal.get_open_ticket(session, user.id)
     is_new_ticket = False
@@ -504,16 +509,16 @@ async def support_message(message: Message, session: AsyncSession, state: FSMCon
         # Создаём тикет только сейчас
         ticket = await dal.create_ticket(session, user.id)
         is_new_ticket = True
-    
+
     # Добавляем сообщение в тикет
     await dal.add_ticket_message(
         session, ticket_id=ticket.id, sender_role="user",
         sender_tg_id=message.from_user.id, text=message.text,
     )
-    
+
     # Сохраняем ticket_id в state
     await state.update_data(ticket_id=ticket.id)
-    
+
     # Уведомляем админов (только для нового тикета)
     if is_new_ticket:
         for admin_id in settings.admin_ids:
@@ -528,7 +533,7 @@ async def support_message(message: Message, session: AsyncSession, state: FSMCon
                 )
             except Exception:
                 pass
-    
+
     await message.answer(
         f"✅ Сообщение принято! Тикет #{ticket.id}.\n\n"
         f"Ожидайте ответа поддержки.",
@@ -538,11 +543,11 @@ async def support_message(message: Message, session: AsyncSession, state: FSMCon
         ]),
     )
 
+
 @router.callback_query(F.data == "close_my_ticket")
 async def close_my_ticket(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
     data = await state.get_data()
     ticket_id = data.get("ticket_id")
-    
     if not ticket_id:
         # Если ticket_id нет в state, ищем открытый тикет
         user = await dal.get_user(session, callback.from_user.id)
@@ -550,7 +555,7 @@ async def close_my_ticket(callback: CallbackQuery, session: AsyncSession, state:
             ticket = await dal.get_open_ticket(session, user.id)
             if ticket:
                 ticket_id = ticket.id
-    
+
     if ticket_id:
         await dal.close_ticket(session, ticket_id)
         for admin_id in settings.admin_ids:
@@ -560,12 +565,14 @@ async def close_my_ticket(callback: CallbackQuery, session: AsyncSession, state:
                 pass
         await state.clear()
         await callback.answer("✅ Тикет закрыт")
-    
+
     user = await dal.get_user(session, callback.from_user.id)
     uuid = user.remnawave_uuid if user else None
     await _show_main_menu(callback, session, callback.from_user.id, uuid)
 
+
 # ── Inline-режим ──────────────────────────────────────────────────────────────
+
 @router.inline_query(F.query.lower() == "invite")
 async def inline_invite(inline_query: InlineQuery):
     tg_id = inline_query.from_user.id
@@ -578,9 +585,8 @@ async def inline_invite(inline_query: InlineQuery):
         "— Тогда выключи и включи.\n\n"
         f"Надоел этот ритуал? 🙃\n\n"
         f"{settings.BOT_NAME} — VPN, который работает без шаманских обрядов.\n\n"
-        "💻 Несколько устройств\n 🌐 Безлимитный трафик\n⚡️ Быстрая скорость"
+        "💻 Несколько устройств\n🌐 Безлимитный трафик\n⚡️ Быстрая скорость"
     )
-
     result = InlineQueryResultArticle(
         id="invite",
         title="Поделиться ссылкой",
@@ -592,21 +598,22 @@ async def inline_invite(inline_query: InlineQuery):
     )
     await inline_query.answer([result], cache_time=30, is_personal=True)
 
+
 # ── Перехват неизвестных сообщений ────────────────────────────────────────────
+
 @router.message(F.text & ~F.text.startswith("/"))
 async def catch_unknown_text(message: Message, session: AsyncSession):
     try:
         await message.delete()
     except Exception:
         pass
-    
     sent_msg = await message.answer(
         "💬 Для общения с поддержкой откройте раздел через меню.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💬 Открыть поддержку", callback_data="menu_support")]
         ]),
     )
-    
+
     # Автоудаление через 15 секунд
     async def _auto_delete():
         try:
@@ -617,10 +624,12 @@ async def catch_unknown_text(message: Message, session: AsyncSession):
             )
         except Exception:
             pass
-    
+
     asyncio.create_task(_auto_delete())
 
+
 # ── Отмена ────────────────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "cancel")
 async def cancel_action(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     await state.clear()
