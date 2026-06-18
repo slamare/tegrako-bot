@@ -20,13 +20,13 @@ async def delete_later(bot, chat_id: int, message_id: int, delay: int = 30):
 
 
 async def cleanup_fsm_interaction(
-    message: Message, 
-    state: FSMContext, 
-    final_msg: Message = None, 
-    final_delay: int = 30
+    message: Message,
+    state: FSMContext,
+    final_msg: Message = None,
+    final_delay: int = 30,
 ):
     """
-    Удаляет сообщение пользователя и предыдущий промпт бота.
+    Удаляет сообщение пользователя и предыдущий промпт бота (если сохранён в state).
     Если передан final_msg — планирует его удаление через final_delay секунд.
     """
     data = await state.get_data()
@@ -39,7 +39,7 @@ async def cleanup_fsm_interaction(
         await message.delete()
     except Exception:
         pass
-    
+
     if final_msg:
         asyncio.create_task(delete_later(message.bot, message.chat.id, final_msg.message_id, final_delay))
 
@@ -94,7 +94,8 @@ class _MenuMessageCache:
 
     def get(self, tg_id: int) -> Optional[int]:
         entry = self._data.get(tg_id)
-        if not entry: return None
+        if not entry:
+            return None
         msg_id, ts = entry
         if time.time() - ts > self._ttl:
             del self._data[tg_id]
@@ -117,12 +118,12 @@ async def show_menu_message(
     photo_url: str | None = None,
 ) -> Message:
     tg_id = target.from_user.id
-    
+
     if isinstance(target, CallbackQuery):
         msg = target.message
         try: await msg.delete()
         except: pass
-        
+
         prev_menu_id = menu_cache.get(tg_id)
         if prev_menu_id and not photo_url:
             try:
@@ -140,10 +141,10 @@ async def show_menu_message(
                 menu_cache.delete(tg_id)
             except Exception:
                 menu_cache.delete(tg_id)
-        
+
         try: await target.answer()
         except: pass
-        
+
         if photo_url:
             try:
                 from aiogram.types import FSInputFile
