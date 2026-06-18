@@ -42,10 +42,8 @@ async def edit_or_answer(
     except TelegramBadRequest as e:
         error_msg = str(e).lower()
         
-        # Если сообщение не изменилось — ничего не делаем
         if "message is not modified" in error_msg:
             edited = True
-        # Если сообщение слишком старое или не найдено — удаляем и отправляем новое
         elif any(x in error_msg for x in [
             "message to edit not found",
             "message can't be edited",
@@ -59,7 +57,6 @@ async def edit_or_answer(
             await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
             edited = True
         else:
-            # Неизвестная ошибка — пробуем удалить и отправить новое
             try:
                 await msg.delete()
             except Exception:
@@ -67,7 +64,6 @@ async def edit_or_answer(
             await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
             edited = True
     except TelegramAPIError:
-        # Любая другая ошибка API — удаляем и отправляем новое
         try:
             await msg.delete()
         except Exception:
@@ -75,7 +71,6 @@ async def edit_or_answer(
         await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
         edited = True
     except Exception:
-        # Любая другая ошибка — удаляем и отправляем новое
         try:
             await msg.delete()
         except Exception:
@@ -101,12 +96,9 @@ async def clear_previous_warning(state: FSMContext):
     if warning_msg_id and chat_id:
         try:
             from aiogram import Bot
-            # Получаем бота из data (если доступно) или пропускаем
-            # Это будет вызываться из middleware где есть доступ к боту
         except Exception:
             pass
     
-    # Очищаем данные из state
     await state.update_data(warning_message_id=None, warning_chat_id=None)
 
 # ── Middleware для автоудаления FSM-сообщений ──────────────────────────────────
@@ -125,8 +117,6 @@ class FSMMessageCleanupMiddleware(BaseMiddleware):
             current_state = await state.get_state()
             if current_state is not None:
                 should_cleanup = True
-                
-                # Очищаем предыдущее предупреждение
                 await clear_previous_warning(state)
 
         result = await handler(event, data)
@@ -192,13 +182,10 @@ async def show_menu_message(
         except Exception:
             pass
         
-        # Пытаемся отредактировать кэшированное меню
+        # Пытаемся отредактировать кэшированное меню (только если нет photo_url)
         prev_menu_id = menu_cache.get(tg_id)
-        if prev_menu_id:
+        if prev_menu_id and not photo_url:
             try:
-                if photo_url:
-                    raise ValueError("Cannot add photo to existing text message")
-                
                 await target.bot.edit_message_text(
                     chat_id=msg.chat.id,
                     message_id=prev_menu_id,
@@ -213,12 +200,10 @@ async def show_menu_message(
                 except Exception:
                     pass
                 
-                # Возвращаем фейковый Message для совместимости
                 return msg
             except TelegramBadRequest as e:
                 error_msg = str(e).lower()
                 
-                # Если сообщение не изменилось — ничего не делаем
                 if "message is not modified" in error_msg:
                     menu_cache.set(tg_id, prev_menu_id)
                     try:
@@ -227,15 +212,33 @@ async def show_menu_message(
                         pass
                     return msg
                 
-                # Если сообщение не найдено — удаляем из кэша
                 if any(x in error_msg for x in [
                     "message to edit not found",
                     "message can't be edited",
                 ]):
+                    # Удаляем старое кэшированное сообщение
+                    try:
+                        await target.bot.delete_message(
+                            chat_id=msg.chat.id, message_id=prev_menu_id
+                        )
+                    except Exception:
+                        pass
                     menu_cache.delete(tg_id)
             except TelegramAPIError:
+                try:
+                    await target.bot.delete_message(
+                        chat_id=msg.chat.id, message_id=prev_menu_id
+                    )
+                except Exception:
+                    pass
                 menu_cache.delete(tg_id)
             except Exception:
+                try:
+                    await target.bot.delete_message(
+                        chat_id=msg.chat.id, message_id=prev_menu_id
+                    )
+                except Exception:
+                    pass
                 menu_cache.delete(tg_id)
         
         # Отправляем новое сообщение
@@ -265,11 +268,8 @@ async def show_menu_message(
 
     # Для Message (не callback)
     prev_id = menu_cache.get(tg_id)
-    if prev_id:
+    if prev_id and not photo_url:
         try:
-            if photo_url:
-                raise ValueError("Cannot add photo to existing text message")
-            
             await target.bot.edit_message_text(
                 chat_id=target.chat.id,
                 message_id=prev_id,
@@ -282,12 +282,10 @@ async def show_menu_message(
         except TelegramBadRequest as e:
             error_msg = str(e).lower()
             
-            # Если сообщение не изменилось — ничего не делаем
             if "message is not modified" in error_msg:
                 menu_cache.set(tg_id, prev_id)
                 return target
             
-            # Если сообщение не найдено — удаляем из кэша
             if any(x in error_msg for x in [
                 "message to edit not found",
                 "message can't be edited",
@@ -300,7 +298,6 @@ async def show_menu_message(
                     pass
                 menu_cache.delete(tg_id)
             else:
-                # Любая другая ошибка — удаляем старое
                 try:
                     await target.bot.delete_message(
                         chat_id=target.chat.id, message_id=prev_id
