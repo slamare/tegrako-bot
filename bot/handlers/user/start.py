@@ -7,6 +7,7 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
+from cachetools import TTLCache
 import re
 import asyncio
 from datetime import datetime, timezone
@@ -22,6 +23,9 @@ from config.settings import settings
 from db import dal
 
 router = Router()
+
+# Кэш для предотвращения спама уведомлениями "Для общения с поддержкой..." (TTL 30 сек)
+_notification_cache = TTLCache(maxsize=1000, ttl=30)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -89,13 +93,19 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
     except Exception:
         pass
 
+    # Удаляем саму команду /start из чата
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
     maintenance = await dal.get_setting(session, "maintenance", "0")
     if maintenance == "1" and tg_id not in settings.admin_ids:
         await message.answer("🔧 Ведутся технические работы. Попробуйте позже.")
         return
 
     referred_by = None
-    args = message.text.split(maxsplit=1)
+    args = message.text.split(maxsplit=1) if message.text else []
     if len(args) > 1 and args[1].startswith("ref_"):
         try:
             ref_id = int(args[1][4:])
@@ -442,7 +452,7 @@ async def menu_invite(callback: CallbackQuery, session: AsyncSession):
     )
 
 
-# ── Proxy для Telegram ─────────────────────────────────────────────────────────────
+# ── Proxy для Telegram ────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "menu_proxy")
 async def menu_proxy(callback: CallbackQuery, session: AsyncSession):
@@ -601,12 +611,27 @@ async def inline_invite(inline_query: InlineQuery):
 
 # ── Перехват неизвестных сообщений ────────────────────────────────────────────
 
-@router.message(F.text & ~F.text.startswith("/"))
+@router.message(
+    (F.text & ~F.text.startswith("/")) |
+    F.sticker | F.photo | F.video | F.document |
+    F.audio | F.voice | F.video_note | F.animation
+)
 async def catch_unknown_text(message: Message, session: AsyncSession):
+    tg_id = message.from_user.id
+
+    # Удаляем сообщение пользователя
     try:
         await message.delete()
     except Exception:
         pass
+
+    # Проверяем, не отправляли ли мы уведомление этому пользователю недавно
+    if tg_id in _notification_cache:
+        return
+
+    # Отмечаем, что отправили уведомление
+    _notification_cache[tg_id] = True
+
     sent_msg = await message.answer(
         "💬 Для общения с поддержкой откройте раздел через меню.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -614,7 +639,7 @@ async def catch_unknown_text(message: Message, session: AsyncSession):
         ]),
     )
 
-    # Автоудаление через 15 секунд
+    # Автоудаление через 60 секунд
     async def _auto_delete():
         try:
             await asyncio.sleep(60)
