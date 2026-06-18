@@ -1,10 +1,11 @@
+import asyncio
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy.ext.asyncio import AsyncSession
 from bot.states.states import PaymentSG
 from bot.keyboards.user_kb import tariffs_kb, nav_kb, cancel_kb
-from bot.utils.helpers import edit_or_answer
+from bot.utils.helpers import edit_or_answer, cleanup_fsm_interaction, delete_later
 from config.settings import settings
 from db import dal
 
@@ -20,23 +21,18 @@ async def _get_tariffs_for_user(session, user) -> list:
     result = []
     for t in all_tariffs:
         if t.is_trial:
-            if not has_sub and not has_payment:
-                result.append(t)
+            if not has_sub and not has_payment: result.append(t)
         elif t.is_referral:
-            if is_first_month_referral:
-                result.append(t)
+            if is_first_month_referral: result.append(t)
         else:
-            if not is_first_month_referral:
-                result.append(t)
+            if not is_first_month_referral: result.append(t)
     return result
 
-async def _check_purchase_access(session, tg_id: int) -> tuple[str, str]:
-    if tg_id in settings.admin_ids:
-        return True, " "
+async def _check_purchase_access(session, tg_id: int) -> tuple[bool, str]:
+    if tg_id in settings.admin_ids: return True, ""
     mode = await dal.get_setting(session, "access_mode", "open")
-    if mode in ("closed", "no_purchase"):
-        return False, "🚫 Оформление подписки временно недоступно."
-    return True, " "
+    if mode in ("closed", "no_purchase"): return False, "🚫 Оформление подписки временно недоступно."
+    return True, ""
 
 # ── Вход в покупку ────────────────────────────────────────────────────────────
 @router.callback_query(F.data=="menu_buy")
@@ -53,11 +49,7 @@ async def menu_buy(callback: CallbackQuery, session: AsyncSession, state: FSMCon
     if not tariffs:
         await callback.answer("Тарифы временно недоступны.", show_alert=True)
         return
-    await edit_or_answer(
-        callback,
-        "📦 <b>Выберите тариф:</b>",
-        reply_markup=tariffs_kb(tariffs),
-    )
+    await edit_or_answer(callback, "📦 <b>Выберите тариф:</b>", reply_markup=tariffs_kb(tariffs))
     await state.set_state(PaymentSG.choose_tariff)
 
 @router.callback_query(PaymentSG.choose_tariff, F.data.startswith("tariff:"))
@@ -69,19 +61,13 @@ async def choose_tariff(callback: CallbackQuery, session: AsyncSession, state: F
         return
     user = await dal.get_user(session, callback.from_user.id)
     if tariff.is_trial and user and await dal.has_used_trial(session, user.id):
-        await callback.answer(
-            "🚫 Пробный тариф — только для новых пользователей без подписки.",
-            show_alert=True,
-        )
+        await callback.answer(" Пробный тариф — только для новых пользователей без подписки.", show_alert=True)
         return
     if tariff.is_referral:
         has_payment = await dal.has_any_approved_payment(session, user.id)
         used_referral = await dal.has_used_referral_tariff(session, user.id)
         if not user.referred_by or has_payment or used_referral:
-            await callback.answer(
-                "🚫 Реферальный тариф — только для приглашённых на первый месяц.",
-                show_alert=True,
-            )
+            await callback.answer("🚫 Реферальный тариф — только для приглашённых на первый месяц.", show_alert=True)
             return
     await state.update_data(tariff_id=tariff_id, amount=float(tariff.price))
     requisites = settings.payment_requisites
@@ -90,61 +76,39 @@ async def choose_tariff(callback: CallbackQuery, session: AsyncSession, state: F
         return
     traffic = f"{tariff.traffic_limit_gb} ГБ" if tariff.traffic_limit_gb else "Безлимит"
     devices = f"{tariff.device_limit} уст." if tariff.device_limit else "Безлимит"
-    kb_rows = [
-        [InlineKeyboardButton(text=req["label"], callback_data=f"req:{i}")]
-        for i, req in enumerate(requisites)
-    ]
+    kb_rows = [[InlineKeyboardButton(text=req["label"], callback_data=f"req:{i}")] for i, req in enumerate(requisites)]
     kb_rows.append([InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")])
     kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="menu_buy")])
     kb_rows.append([InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")])
-    await edit_or_answer(
-        callback,
-        f"📦 <b>{tariff.name}</b>\n\n"
-        f"⏱ {tariff.duration_days} дней · 📊 {traffic} · 📱 {devices}\n"
-        f"💰 <b>{int(tariff.price)} ₽</b>\n\n"
-        f"Выберите способ оплаты:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
-    )
+    await edit_or_answer(callback, f"📦 <b>{tariff.name}</b>\n\n⏱ {tariff.duration_days} дней · 📊 {traffic} · 📱 {devices}\n <b>{int(tariff.price)} ₽</b>\n\nВыберите способ оплаты:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
     await state.set_state(PaymentSG.choose_requisite)
 
 # ── Промокод ──────────────────────────────────────────────────────────────────
 @router.callback_query(PaymentSG.choose_requisite, F.data=="enter_promo")
 async def enter_promo_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(PaymentSG.enter_promo)
-    await edit_or_answer(
-        callback,
-        "🎟 Введите промокод:",
-        reply_markup=cancel_kb("menu_buy"),
-    )
+    await edit_or_answer(callback, "🎟 Введите промокод:", reply_markup=cancel_kb("menu_buy"))
 
-@router.message(PaymentSG.enter_promo)
+@router.message(PaymentSG.enter_promo, F.text)
 async def apply_promo(message: Message, session: AsyncSession, state: FSMContext):
     data = await state.get_data()
-    try:
-        await message.delete()
-    except Exception:
-        pass
     promo, error = await dal.validate_promo(session, message.text.strip(), data.get("tariff_id"))
     if error:
-        await message.answer(f"❌ {error}")
+        await cleanup_fsm_interaction(message, state)
+        msg = await message.answer(f"❌ {error}")
+        asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
         return
     new_amount = await dal.apply_promo_discount(promo, data.get("amount", 0))
     await state.update_data(amount=new_amount, promo_id=promo.id, promo_code=promo.code)
     await state.set_state(PaymentSG.choose_requisite)
+    await cleanup_fsm_interaction(message, state)
     disc = f"{promo.discount_percent}%" if promo.discount_percent else f"{int(promo.discount_fixed)} ₽"
     requisites = settings.payment_requisites
-    kb_rows = [
-        [InlineKeyboardButton(text=req["label"], callback_data=f"req:{i}")]
-        for i, req in enumerate(requisites)
-    ]
+    kb_rows = [[InlineKeyboardButton(text=req["label"], callback_data=f"req:{i}")] for i, req in enumerate(requisites)]
     kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="menu_buy")])
     kb_rows.append([InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")])
-    await message.answer(
-        f"✅ Промокод <b>{promo.code}</b> применён! Скидка: {disc}\n"
-        f"💰 Итого: <b>{int(new_amount)} ₽</b>\n\nВыберите способ оплаты:",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
-    )
+    msg = await message.answer(f"✅ Промокод <b>{promo.code}</b> применён! Скидка: {disc}\n💰 Итого: <b>{int(new_amount)} ₽</b>\n\nВыберите способ оплаты:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+    asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
 # ── Реквизиты ─────────────────────────────────────────────────────────────────
 @router.callback_query(PaymentSG.choose_requisite, F.data.startswith("req:"))
@@ -159,41 +123,28 @@ async def choose_requisite(callback: CallbackQuery, session: AsyncSession, state
     await state.update_data(payment_method=req["label"])
     details = req["details"]
     is_image = details.lower().endswith((".png", ".jpg", ".jpeg")) or details.startswith("AgAC")
-    promo_note = f"\n🎟 Промокод: <b>{data['promo_code']}</b>" if data.get("promo_code") else ""
+    promo_note = f"\n Промокод: <b>{data['promo_code']}</b>" if data.get("promo_code") else ""
     nav = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀️ Назад", callback_data="menu_buy")],
         [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
     ])
     amount_str = int(data["amount"])
     if is_image:
-        caption = (
-            f"💳 <b>Оплата через {req['label']}</b>\n\n"
-            f"Отсканируйте QR-код в приложении банка.\n\n"
-            f"📌 В комментарии укажите ID: <code>{callback.from_user.id}</code>"
-            f"{promo_note}\n\nПришлите <b>скриншот</b> подтверждения."
-        )
+        caption = (f"💳 <b>Оплата через {req['label']}</b>\n\nОтсканируйте QR-код в приложении банка.\n\n"
+                   f" В комментарии укажите ID: <code>{callback.from_user.id}</code>{promo_note}\n\nПришлите <b>скриншот</b> подтверждения.")
     else:
-        caption = (
-            f"💳 <b>Оплата через {req['label']}</b>\n\n"
-            f"Переведите <b>{amount_str} ₽</b> по реквизитам:\n\n"
-            f"<code>{details}</code>\n\n"
-            f"📌 В комментарии укажите ID: <code>{callback.from_user.id}</code>"
-            f"{promo_note}\n\nПришлите <b>скриншот</b> подтверждения."
-        )
+        caption = (f"💳 <b>Оплата через {req['label']}</b>\n\nПереведите <b>{amount_str} ₽</b> по реквизитам:\n\n"
+                   f"<code>{details}</code>\n\n📌 В комментарии укажите ID: <code>{callback.from_user.id}</code>{promo_note}\n\nПришлите <b>скриншот</b> подтверждения.")
     if is_image:
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
-        await callback.message.answer_photo(details, caption=caption, parse_mode="HTML", reply_markup=nav)
-        await callback.answer()
+        try: await callback.message.delete()
+        except: pass
+        msg = await callback.message.answer_photo(details, caption=caption, parse_mode="HTML", reply_markup=nav)
+        await state.update_data(bot_prompt_msg_id=msg.message_id)
     else:
-        await edit_or_answer(
-            callback,
-            caption,
-            reply_markup=nav,
-        )
+        msg = await edit_or_answer(callback, caption, reply_markup=nav)
+        await state.update_data(bot_prompt_msg_id=msg.message_id if msg else None)
     await state.set_state(PaymentSG.waiting_screenshot)
+    await callback.answer()
 
 # ── Скриншот ──────────────────────────────────────────────────────────────────
 @router.message(PaymentSG.waiting_screenshot, F.photo)
@@ -208,47 +159,32 @@ async def receive_screenshot(message: Message, session: AsyncSession, state: FSM
     amount = data.get("amount", float(tariff.price) if tariff else 0)
     payment_method = data.get("payment_method", "—")
     promo_id = data.get("promo_id")
-    payment = await dal.create_payment(
-        session,
-        user_id=user.id,
-        tariff_id=tariff.id if tariff else None,
-        amount=amount,
-        payment_method=payment_method,
-        screenshot_file_id=file_id,
-        promo_id=promo_id,
-    )
+    payment = await dal.create_payment(session, user_id=user.id, tariff_id=tariff.id if tariff else None, amount=amount, payment_method=payment_method, screenshot_file_id=file_id, promo_id=promo_id)
     promo_note = f"\n🎟 {data['promo_code']}" if data.get("promo_code") else ""
-    admin_text = (
-        f"💳 <b>Оплата #{payment.id}</b>\n\n"
-        f"👤 @{user.username or '—'} (<code>{user.telegram_id}</code>)\n"
-        f"🆔 <code>{user.remnawave_username or '—'}</code>\n"
-        f"📦 {tariff.name if tariff else 'доп. устройство'} "
-        f"{'('+str(tariff.duration_days) +' дн.)' if tariff else ''}\n"
-        f"💰 {int(amount)} ₽ \| {payment_method}{promo_note}"
-    )
+    admin_text = (f"💳 <b>Оплата #{payment.id}</b>\n\n👤 @{user.username or '—'} (<code>{user.telegram_id}</code>)\n"
+                  f"🆔 <code>{user.remnawave_username or '—'}</code>\n📦 {tariff.name if tariff else 'доп. устройство'} "
+                  f"{'('+str(tariff.duration_days) +' дн.)' if tariff else ''}\n💰 {int(amount)} ₽ | {payment_method}{promo_note}")
     from bot.keyboards.admin_kb import payment_approve_kb
     for admin_id in settings.admin_ids:
         try:
-            admin_msg = await message.bot.send_photo(
-                admin_id, photo=file_id, caption=admin_text,
-                parse_mode="HTML", reply_markup=payment_approve_kb(payment.id),
-            )
+            admin_msg = await message.bot.send_photo(admin_id, photo=file_id, caption=admin_text, parse_mode="HTML", reply_markup=payment_approve_kb(payment.id))
             await dal.update_payment(session, payment.id, admin_message_id=admin_msg.message_id)
-        except Exception:
-            pass
+        except: pass
+    await cleanup_fsm_interaction(message, state)
     from bot.keyboards.user_kb import main_menu_kb
-    await message.answer(
-        "✅ <b>Скриншот получен!</b>\n\n"
-        "Платёж отправлен на проверку. Обычно до 30 минут.\n"
-        "После подтверждения получите уведомление.",
-        parse_mode="HTML",
-        reply_markup=main_menu_kb(is_admin=message.from_user.id in settings.admin_ids),
-    )
+    msg = await message.answer("✅ <b>Скриншот получен!</b>\n\nПлатёж отправлен на проверку. Обычно до 30 минут.\nПосле подтверждения получите уведомление.", parse_mode="HTML", reply_markup=main_menu_kb(is_admin=message.from_user.id in settings.admin_ids))
     await state.clear()
+    asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
 @router.message(PaymentSG.waiting_screenshot)
-async def wrong_format(message: Message):
-    await message.answer("📸 Пришлите именно <b>фото</b> скриншота.", parse_mode="HTML")
+async def wrong_format(message: Message, state: FSMContext):
+    await cleanup_fsm_interaction(message, state)
+    if message.voice or message.video_note:
+        text = " <b>Бот не умеет расшифровывать голосовые сообщения.</b>"
+    else:
+        text = "📸 <b>Ожидается только фото скриншота.</b>\n\nПожалуйста, отправьте изображение."
+    msg = await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 Написать в поддержку", callback_data="menu_support")]]))
+    asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
 # ── Продление из профиля ──────────────────────────────────────────────────────
 @router.callback_query(F.data=="renew_subscription")
@@ -262,11 +198,7 @@ async def renew_subscription(callback: CallbackQuery, session: AsyncSession, sta
     if not tariffs:
         await callback.answer("Тарифы временно недоступны", show_alert=True)
         return
-    await edit_or_answer(
-        callback,
-        "📦 <b>Выберите тариф:</b>",
-        reply_markup=tariffs_kb(tariffs),
-    )
+    await edit_or_answer(callback, "📦 <b>Выберите тариф:</b>", reply_markup=tariffs_kb(tariffs))
     await state.set_state(PaymentSG.choose_tariff)
 
 # ── Доп. слот устройства ──────────────────────────────────────────────────────
@@ -288,18 +220,8 @@ async def buy_device_slot(callback: CallbackQuery, session: AsyncSession, state:
         await callback.answer("Реквизиты не настроены.", show_alert=True)
         return
     await state.update_data(tariff_id=None, amount=settings.DEVICE_SLOT_PRICE, payment_type="device_slot")
-    kb_rows = [
-        [InlineKeyboardButton(text=req["label"], callback_data=f"req:{i}")]
-        for i, req in enumerate(requisites)
-    ]
+    kb_rows = [[InlineKeyboardButton(text=req["label"], callback_data=f"req:{i}")] for i, req in enumerate(requisites)]
     kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="my_devices")])
     kb_rows.append([InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")])
-    await edit_or_answer(
-        callback,
-        f"📱 <b>Дополнительный слот устройства</b>\n\n"
-        f"Стоимость: <b>{int(settings.DEVICE_SLOT_PRICE)} ₽</b>\n\n"
-        f"После подтверждения лимит устройств увеличится на 1.\n\n"
-        f"Выберите способ оплаты:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
-    )
+    await edit_or_answer(callback, f"📱 <b>Дополнительный слот устройства</b>\n\nСтоимость: <b>{int(settings.DEVICE_SLOT_PRICE)} ₽</b>\n\nПосле подтверждения лимит устройств увеличится на 1.\n\nВыберите способ оплаты:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
     await state.set_state(PaymentSG.choose_requisite)
