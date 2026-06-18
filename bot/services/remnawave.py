@@ -20,7 +20,7 @@ def _url(path: str) -> str:
     return f"{settings.PANEL_API_URL}/api{path}"
 
 
-# ── Dataclasses ────────────────────────────────────────────────────────────
+# ── Dataclasses ───────────────────────────────────────────────────────────
 
 @dataclass
 class UserTraffic:
@@ -204,7 +204,6 @@ async def extend_subscription(uuid: str, duration_days: int) -> UserInfo:
 
 
 async def set_expire_at(uuid: str, expire_at: datetime) -> Optional[UserInfo]:
-    """Установить конкретную дату истечения (используется для бессрочного доступа)."""
     payload = {
         "uuid": uuid,
         "expireAt": expire_at.isoformat(),
@@ -228,7 +227,6 @@ async def update_user_limits(
     traffic_limit_gb: Optional[int] = None,
     device_limit: Optional[int] = None,
 ) -> Optional[UserInfo]:
-    """Изменить лимиты трафика и устройств."""
     payload: dict = {"uuid": uuid}
     if traffic_limit_gb is not None:
         payload["trafficLimitBytes"] = traffic_limit_gb * 1024 ** 3
@@ -248,7 +246,6 @@ async def update_user_limits(
 
 
 async def set_user_status(uuid: str, status: str) -> Optional[UserInfo]:
-    """Включить (ACTIVE) или выключить (DISABLED) пользователя."""
     payload = {"uuid": uuid, "status": status}
     try:
         async with httpx.AsyncClient(verify=True) as client:
@@ -264,7 +261,6 @@ async def set_user_status(uuid: str, status: str) -> Optional[UserInfo]:
 
 
 async def delete_panel_user(uuid: str) -> bool:
-    """Удалить пользователя из панели."""
     try:
         async with httpx.AsyncClient(verify=True) as client:
             resp = await client.delete(_url(f"/users/{uuid}"), headers=_headers(), timeout=10)
@@ -277,7 +273,6 @@ async def delete_panel_user(uuid: str) -> bool:
 
 
 async def reset_user_traffic(uuid: str) -> bool:
-    """Сброс использованного трафика."""
     try:
         async with httpx.AsyncClient(verify=True) as client:
             resp = await client.post(
@@ -430,7 +425,7 @@ async def delete_all_user_devices(user_uuid: str) -> bool:
         return False
 
 
-# ── Nodes ──────────────────────────────────────────────────────────────────
+# ─ Nodes ──────────────────────────────────────────────────────────────────
 
 async def get_nodes() -> list[NodeInfo]:
     try:

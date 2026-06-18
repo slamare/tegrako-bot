@@ -312,7 +312,7 @@ async def revoke_subscription_confirm(callback: CallbackQuery, session: AsyncSes
     if not rw:
         await callback.answer("Ошибка при сбросе ссылки", show_alert=True)
         return
-
+    
     # Сбрасываем кэш подписки
     remnawave.invalidate_sub_info_cache(user.remnawave_uuid)
 
@@ -509,7 +509,7 @@ async def menu_support(callback: CallbackQuery, session: AsyncSession, state: FS
     )
 
 
-@router.message(SupportSG.waiting_message)
+@router.message(SupportSG.waiting_message, F.text)
 async def support_message(message: Message, session: AsyncSession, state: FSMContext):
     user = await dal.get_user(session, message.from_user.id)
     if not user:
@@ -546,7 +546,7 @@ async def support_message(message: Message, session: AsyncSession, state: FSMCon
         f"Ожидайте ответа поддержки.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data="close_my_ticket")],
-            [InlineKeyboardButton(text=" Меню", callback_data="main_menu")],
+            [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
         ]),
     )
 
@@ -591,7 +591,7 @@ async def inline_invite(inline_query: InlineQuery):
         "— Тогда выключи и включи.\n\n"
         f"Надоел этот ритуал? 🙃\n\n"
         f"{settings.BOT_NAME} — VPN, который работает без шаманских обрядов.\n\n"
-        "💻 Несколько устройств\n🌐 Безлимитный трафик\n️ Быстрая скорость"
+        "💻 Несколько устройств\n🌐 Безлимитный трафик\n️⚡ Быстрая скорость"
     )
     result = InlineQueryResultArticle(
         id="invite",
@@ -609,14 +609,13 @@ async def inline_invite(inline_query: InlineQuery):
 
 @router.message(
     (F.text & ~F.text.startswith("/")) |
-    F.sticker | F.photo | F.video | F.document |
-    F.audio | F.voice | F.video_note | F.animation
+    F.voice | F.video_note
 )
 async def catch_unknown_text(message: Message, session: AsyncSession, state: FSMContext):
     # Проверяем, находится ли пользователь в FSM-состоянии
     current_state = await state.get_state()
     if current_state is not None:
-        # Пользователь в FSM-состоянии — пропускаем, пусть FSM-хендлеры работают
+        # В FSM — пропускаем, там свои хендлеры (включая голосовые)
         return
 
     tg_id = message.from_user.id
@@ -634,10 +633,17 @@ async def catch_unknown_text(message: Message, session: AsyncSession, state: FSM
     # Отмечаем, что отправили уведомление
     _notification_cache[tg_id] = True
 
+    # Разный текст для голосовых и обычного текста
+    if message.voice or message.video_note:
+        text = "🎙 <b>Бот не умеет расшифровывать голосовые сообщения.</b>\n\nИспользуйте текстовый ввод или кнопки меню."
+    else:
+        text = "💬 Для общения с поддержкой откройте раздел через меню."
+
     sent_msg = await message.answer(
-        "💬 Для общения с поддержкой откройте раздел через меню.",
+        text,
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=" Открыть поддержку", callback_data="menu_support")]
+            [InlineKeyboardButton(text="💬 Написать в поддержку", callback_data="menu_support")]
         ]),
     )
 
@@ -653,6 +659,27 @@ async def catch_unknown_text(message: Message, session: AsyncSession, state: FSM
             pass
 
     asyncio.create_task(_auto_delete())
+
+
+# ── Защита от голосовых в FSM-состояниях ──────────────────────────────────────
+
+@router.message(F.voice | F.video_note)
+async def catch_voice_in_fsm(message: Message, state: FSMContext):
+    """Если пользователь в FSM и отправил голосовое — показываем плашку."""
+    current_state = await state.get_state()
+    if current_state is None:
+        return  # Вне FSM — обработает catch_unknown_text
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    await message.answer(
+        "🎙 <b>Бот не умеет расшифровывать голосовые сообщения.</b>\n\n"
+        "Пожалуйста, используйте текстовый ввод.",
+        parse_mode="HTML",
+    )
 
 
 # ── Отмена ────────────────────────────────────────────────────────────────────
