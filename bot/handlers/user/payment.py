@@ -11,6 +11,7 @@ router = Router()
 
 async def _edit_or_answer(callback: CallbackQuery, text: str, reply_markup=None, parse_mode: str = "HTML"):
     """Универсальное редактирование: edit_text для текста, удаление+новое для фото."""
+    from bot.utils.helpers import menu_cache
     msg = callback.message
     if msg.photo:
         # Фото нельзя превратить в текст — удаляем и шлём новое
@@ -18,7 +19,9 @@ async def _edit_or_answer(callback: CallbackQuery, text: str, reply_markup=None,
             await msg.delete()
         except Exception:
             pass
-        await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        sent = await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        # Обновляем кэш меню чтобы следующий /start редактировал это сообщение
+        menu_cache.set(callback.from_user.id, sent.message_id)
     else:
         try:
             await msg.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
@@ -27,7 +30,8 @@ async def _edit_or_answer(callback: CallbackQuery, text: str, reply_markup=None,
                 await msg.delete()
             except Exception:
                 pass
-            await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
+            sent = await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
+            menu_cache.set(callback.from_user.id, sent.message_id)
     await callback.answer()
 
 async def _get_tariffs_for_user(session, user) -> list:
