@@ -10,20 +10,24 @@ from db import dal
 router = Router()
 
 async def _edit_or_answer(callback: CallbackQuery, text: str, reply_markup=None, parse_mode: str = "HTML"):
-    """Универсальное редактирование: edit_caption для фото, edit_text для текста."""
+    """Универсальное редактирование: edit_text для текста, удаление+новое для фото."""
     msg = callback.message
-    try:
-        if msg.photo:
-            await msg.edit_caption(caption=text, parse_mode=parse_mode, reply_markup=reply_markup)
-        else:
-            await msg.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
-    except Exception:
-        # Если редактирование не удалось — удаляем старое и отправляем новое
+    if msg.photo:
+        # Фото нельзя превратить в текст — удаляем и шлём новое
         try:
             await msg.delete()
         except Exception:
             pass
         await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    else:
+        try:
+            await msg.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        except Exception:
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
     await callback.answer()
 
 async def _get_tariffs_for_user(session, user) -> list:
