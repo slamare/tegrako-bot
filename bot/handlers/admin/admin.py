@@ -1383,4 +1383,10 @@ async def custbtn_text(message: Message, state: FSMContext):
 @router.message(AdminSG.custbtn_url)
 async def custbtn_url(message: Message, state: FSMContext):
     await state.update_data(btn_url=message.text.strip())
-    await state.set_state(AdminSG.custbtn_condition) await state.set_state(AdminSG.custbtn_condition)
+    await state.set_state(AdminSG.custbtn_condition)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 Всем", callback_data="custbtn_cond:all")],
+        [InlineKeyboardButton(text="✅ Только с активной подпиской", callback_data="custbtn_cond:active_sub")],
+    ])
+    await message.answer("Кому показывать кнопку?", reply_markup=kb)
