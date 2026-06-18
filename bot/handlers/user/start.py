@@ -75,10 +75,43 @@ async def _check_access(session, tg_id: int, action: str) -> tuple[bool, str]:
 
 
 async def _show_main_menu(target, session, tg_id: int, remnawave_uuid: str | None):
-    """Показывает или редактирует главное меню. target — Message или CallbackQuery."""
+    """Показывает главное меню. target — Message или CallbackQuery."""
     kb = await _get_menu_kb(session, tg_id, remnawave_uuid)
     text = _welcome_text()
-    await show_menu_message(target, text, reply_markup=kb)
+    
+    if isinstance(target, CallbackQuery):
+        # Для callback — всегда отправляем новое сообщение
+        if settings.WELCOME_IMAGE_URL:
+            try:
+                img = settings.WELCOME_IMAGE_URL
+                photo = (
+                    img if img.startswith("http")
+                    else __import__("aiogram.types", fromlist=["FSInputFile"]).FSInputFile(img)
+                )
+                await target.message.answer_photo(
+                    photo, caption=text, parse_mode="HTML", reply_markup=kb
+                )
+            except Exception:
+                await target.message.answer(text, parse_mode="HTML", reply_markup=kb)
+        else:
+            await target.message.answer(text, parse_mode="HTML", reply_markup=kb)
+        await target.answer()
+    else:
+        # Для message (не callback) — тоже отправляем новое
+        if settings.WELCOME_IMAGE_URL:
+            try:
+                img = settings.WELCOME_IMAGE_URL
+                photo = (
+                    img if img.startswith("http")
+                    else __import__("aiogram.types", fromlist=["FSInputFile"]).FSInputFile(img)
+                )
+                await target.answer_photo(
+                    photo, caption=text, parse_mode="HTML", reply_markup=kb
+                )
+            except Exception:
+                await target.answer(text, parse_mode="HTML", reply_markup=kb)
+        else:
+            await target.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
 # ── /start ────────────────────────────────────────────────────────────────────
