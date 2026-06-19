@@ -1257,8 +1257,17 @@ async def do_assign_tariff(callback: CallbackQuery, session: AsyncSession):
         await callback.answer("Не найдено", show_alert=True)
         return
     try:
+        squad_uuid = tariff.squad_uuid if tariff.squad_uuid else settings.DEFAULT_SQUAD_UUID
         if user.remnawave_uuid:
             await remnawave.extend_subscription(user.remnawave_uuid, tariff.duration_days)
+            # Обновляем лимиты под новый тариф
+            await remnawave.update_user_limits(
+                user.remnawave_uuid,
+                traffic_limit_gb=tariff.traffic_limit_gb,
+                device_limit=tariff.device_limit,
+            )
+            if squad_uuid:
+                await remnawave.add_user_to_squad(user.remnawave_uuid, squad_uuid)
         else:
             rw_user = await remnawave.create_user(
                 username=user.remnawave_username or f"user{tg_id}",
@@ -1268,6 +1277,8 @@ async def do_assign_tariff(callback: CallbackQuery, session: AsyncSession):
                 telegram_id=tg_id,
             )
             await dal.update_user(session, tg_id, remnawave_uuid=str(rw_user.uuid))
+            if squad_uuid:
+                await remnawave.add_user_to_squad(str(rw_user.uuid), squad_uuid)
         remnawave.invalidate_sub_info_cache(user.remnawave_uuid)
         # ── MTProto ────────────────────────────────────────────────────
         try:
