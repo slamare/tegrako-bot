@@ -643,9 +643,6 @@ async def inline_invite(inline_query: InlineQuery):
 async def catch_voice_global(message: Message, state: FSMContext):
     """Голосовые и кружочки запрещены везде вне FSM."""
     tg_id = message.from_user.id
-    if tg_id in settings.admin_ids:
-        return
-
     try:
         await message.delete()
     except Exception:
@@ -671,9 +668,6 @@ async def catch_voice_global(message: Message, state: FSMContext):
 async def catch_sticker_global(message: Message, state: FSMContext):
     """Стикеры запрещены везде вне FSM."""
     tg_id = message.from_user.id
-    if tg_id in settings.admin_ids:
-        return
-
     try:
         await message.delete()
     except Exception:
@@ -699,9 +693,6 @@ async def catch_sticker_global(message: Message, state: FSMContext):
 async def catch_media_global(message: Message, state: FSMContext):
     """Медиа вне FSM — удаляем и показываем плашку."""
     tg_id = message.from_user.id
-    if tg_id in settings.admin_ids:
-        return
-
     try:
         await message.delete()
     except Exception:
@@ -727,9 +718,6 @@ async def catch_media_global(message: Message, state: FSMContext):
 async def catch_text_global(message: Message, session: AsyncSession, state: FSMContext):
     """Произвольный текст вне FSM — удаляем и показываем плашку."""
     tg_id = message.from_user.id
-    if tg_id in settings.admin_ids:
-        return
-
     try:
         await message.delete()
     except Exception:

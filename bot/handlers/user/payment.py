@@ -176,14 +176,46 @@ async def receive_screenshot(message: Message, session: AsyncSession, state: FSM
     await state.clear()
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
+@router.message(PaymentSG.waiting_screenshot, F.text)
+async def wrong_format_text(message: Message, state: FSMContext):
+    """Текст на этапе скриншота — удаляем сообщение, новая плашка про поддержку, реквизиты не трогаем."""
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    msg = await message.answer(
+        "💬 <b>На этом шаге нужно отправить фото скриншота оплаты.</b>\n\n"
+        "Если возникли вопросы — обратитесь в поддержку.",
+        parse_mode="HTML",
+        disable_notification=True,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💬 Написать в поддержку", callback_data="menu_support")]
+        ]),
+    )
+    asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
+
+
 @router.message(PaymentSG.waiting_screenshot)
 async def wrong_format(message: Message, state: FSMContext):
-    await cleanup_fsm_interaction(message, state)
+    """Неверный тип вложения (не фото, не текст) — удаляем, показываем нужный тип."""
+    try:
+        await message.delete()
+    except Exception:
+        pass
     if message.voice or message.video_note:
-        text = " <b>Бот не умеет расшифровывать голосовые сообщения.</b>"
+        text = "🎙 Голосовые и кружки не принимаются.\n\nОтправьте <b>фото</b> скриншота подтверждения оплаты."
+    elif message.sticker or message.animation:
+        text = "🙅 Стикеры и гифки не принимаются.\n\nОтправьте <b>фото</b> скриншота подтверждения оплаты."
     else:
-        text = "📸 <b>Ожидается только фото скриншота.</b>\n\nПожалуйста, отправьте изображение."
-    msg = await message.answer(text, parse_mode="HTML", disable_notification=True, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 Написать в поддержку", callback_data="menu_support")]]))
+        text = "📸 <b>Ожидается фото скриншота.</b>\n\nОтправьте изображение из галереи."
+    msg = await message.answer(
+        text,
+        parse_mode="HTML",
+        disable_notification=True,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💬 Написать в поддержку", callback_data="menu_support")]
+        ]),
+    )
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
 # ── Продление из профиля ──────────────────────────────────────────────────────
