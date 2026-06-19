@@ -1269,6 +1269,23 @@ async def do_assign_tariff(callback: CallbackQuery, session: AsyncSession):
             )
             await dal.update_user(session, tg_id, remnawave_uuid=str(rw_user.uuid))
         remnawave.invalidate_sub_info_cache(user.remnawave_uuid)
+        # ── MTProto ────────────────────────────────────────────────────
+        try:
+            from bot.services import telemt as telemt_svc
+            max_ips = max(1, tariff.device_limit) if tariff.device_limit else 1
+            updated_user = await dal.get_user(session, tg_id)
+            if updated_user:
+                if not updated_user.mtproto_secret:
+                    secret = telemt_svc.generate_secret()
+                    telemt_svc.add_user(updated_user.remnawave_username, secret, max_ips=max_ips)
+                    await dal.update_user(session, tg_id, mtproto_secret=secret)
+                else:
+                    telemt_svc.add_user(updated_user.remnawave_username, updated_user.mtproto_secret, max_ips=max_ips)
+        except Exception as _e:
+            import logging as _log
+            _log.getLogger(__name__).warning(f"MTProto provision failed in assign_tariff: {_e}")
+        # ───────────────────────────────────────────────────────────────
+
         await callback.answer(f"✅ Тариф {tariff.name} назначен", show_alert=True)
         try:
             await callback.bot.send_message(
