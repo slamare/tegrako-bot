@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
@@ -639,13 +639,9 @@ async def inline_invite(inline_query: InlineQuery):
 
 # ── Перехват неизвестных сообщений (глобальные) ──────────────────────────────
 
-@router.message(F.voice | F.video_note)
+@router.message(F.voice | F.video_note, StateFilter(None))
 async def catch_voice_global(message: Message, state: FSMContext):
     """Голосовые и кружочки запрещены везде вне FSM."""
-    current_state = await state.get_state()
-    if current_state is not None:
-        return
-
     tg_id = message.from_user.id
     if tg_id in settings.admin_ids:
         return
@@ -671,13 +667,9 @@ async def catch_voice_global(message: Message, state: FSMContext):
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
 
-@router.message(F.sticker)
+@router.message(F.sticker, StateFilter(None))
 async def catch_sticker_global(message: Message, state: FSMContext):
     """Стикеры запрещены везде вне FSM."""
-    current_state = await state.get_state()
-    if current_state is not None:
-        return
-
     tg_id = message.from_user.id
     if tg_id in settings.admin_ids:
         return
@@ -703,13 +695,9 @@ async def catch_sticker_global(message: Message, state: FSMContext):
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
 
-@router.message(F.photo | F.video | F.animation | F.document | F.contact | F.location)
+@router.message(F.photo | F.video | F.animation | F.document | F.contact | F.location, StateFilter(None))
 async def catch_media_global(message: Message, state: FSMContext):
     """Медиа вне FSM — удаляем и показываем плашку."""
-    current_state = await state.get_state()
-    if current_state is not None:
-        return
-
     tg_id = message.from_user.id
     if tg_id in settings.admin_ids:
         return
@@ -735,13 +723,9 @@ async def catch_media_global(message: Message, state: FSMContext):
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
 
-@router.message(F.text & ~F.text.startswith("/"))
+@router.message(F.text & ~F.text.startswith("/"), StateFilter(None))
 async def catch_text_global(message: Message, session: AsyncSession, state: FSMContext):
     """Произвольный текст вне FSM — удаляем и показываем плашку."""
-    current_state = await state.get_state()
-    if current_state is not None:
-        return
-
     tg_id = message.from_user.id
     if tg_id in settings.admin_ids:
         return
