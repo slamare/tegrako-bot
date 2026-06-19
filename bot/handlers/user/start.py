@@ -95,7 +95,7 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
 
     maintenance = await dal.get_setting(session, "maintenance", "0")
     if maintenance == "1" and tg_id not in settings.admin_ids:
-        await message.answer("🔧 Ведутся технические работы. Попробуйте позже.")
+        await message.answer("🔧 Ведутся технические работы. Попробуйте позже.", disable_notification=True)
         return
 
     referred_by = None
@@ -143,7 +143,7 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
 
     allowed, error = await _check_access(session, tg_id, "register")
     if not allowed:
-        await message.answer(error)
+        await message.answer(error, disable_notification=True)
         return
 
     await _start_registration(message, session, state)
@@ -176,15 +176,38 @@ async def _start_registration(message: Message, session: AsyncSession, state: FS
             f"Введите другое имя (только латиница, цифры, _): ",
             parse_mode="HTML",
             reply_markup=cancel_kb("main_menu"),
+            disable_notification=True,
         )
     else:
         msg = await message.answer(
             "👤 У вас не установлен username в Telegram.\n\n"
             "Придумайте имя для аккаунта (только латиница, цифры, _): ",
             reply_markup=cancel_kb("main_menu"),
+            disable_notification=True,
         )
     await state.update_data(bot_prompt_msg_id=msg.message_id)
     await state.set_state(RegistrationSG.choose_username)
+
+
+@router.message(RegistrationSG.choose_username, ~F.text)
+async def registration_wrong_type(message: Message, state: FSMContext):
+    """На этапе регистрации принимаем только текст."""
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    data = await state.get_data()
+    if prompt_id := data.get("bot_prompt_msg_id"):
+        try:
+            await message.bot.delete_message(message.chat.id, prompt_id)
+        except Exception:
+            pass
+    msg = await message.answer(
+        "⌨️ На этом шаге нужно ввести текстовое имя аккаунта.\n\nТолько латиница, цифры и _ (от 3 до 32 символов).",
+        disable_notification=True,
+        reply_markup=cancel_kb("main_menu"),
+    )
+    await state.update_data(bot_prompt_msg_id=msg.message_id)
 
 
 @router.message(RegistrationSG.choose_username, F.text)
@@ -192,17 +215,17 @@ async def process_username_input(message: Message, session: AsyncSession, state:
     username = message.text.strip().lstrip("@").lower()
     if not re.match(r'^[a-z0-9_]{3,32}$', username):
         await cleanup_fsm_interaction(message, state)
-        msg = await message.answer("❌ От 3 до 32 символов: только латиница, цифры и _.")
+        msg = await message.answer("❌ От 3 до 32 символов: только латиница, цифры и _.", disable_notification=True)
         await state.update_data(bot_prompt_msg_id=msg.message_id)
         return
     if await remnawave.username_exists(username):
         await cleanup_fsm_interaction(message, state)
-        msg = await message.answer(f"❌ Имя <code>{username}</code> уже занято.", parse_mode="HTML")
+        msg = await message.answer(f"❌ Имя <code>{username}</code> уже занято.", parse_mode="HTML", disable_notification=True)
         await state.update_data(bot_prompt_msg_id=msg.message_id)
         return
     if await dal.get_user_by_remnawave_username(session, username):
         await cleanup_fsm_interaction(message, state)
-        msg = await message.answer("❌ Это имя уже используется.")
+        msg = await message.answer("❌ Это имя уже используется.", disable_notification=True)
         await state.update_data(bot_prompt_msg_id=msg.message_id)
         return
     await cleanup_fsm_interaction(message, state)
@@ -217,6 +240,7 @@ async def _finish_registration(message: Message, session: AsyncSession, username
         f"✅ Аккаунт зарегистрирован: <code>{username}</code>.\n\nТеперь можете оформить подписку.",
         parse_mode="HTML",
         reply_markup=kb,
+        disable_notification=True,
     )
 
 
@@ -551,6 +575,7 @@ async def support_message(message: Message, session: AsyncSession, state: FSMCon
             [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data="close_my_ticket")],
             [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
         ]),
+        disable_notification=True,
     )
     await state.clear()
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
@@ -616,10 +641,13 @@ async def inline_invite(inline_query: InlineQuery):
 
 @router.message(F.voice | F.video_note)
 async def catch_voice_global(message: Message, state: FSMContext):
-    """Голосовые и кружочки запрещены везде."""
+    """Голосовые и кружочки запрещены везде вне FSM."""
     current_state = await state.get_state()
-    # Если в FSM — пропускаем, там свой хендлер
     if current_state is not None:
+        return
+
+    tg_id = message.from_user.id
+    if tg_id in settings.admin_ids:
         return
 
     try:
@@ -627,24 +655,31 @@ async def catch_voice_global(message: Message, state: FSMContext):
     except Exception:
         pass
 
-    tg_id = message.from_user.id
     if tg_id in _notification_cache:
         return
     _notification_cache[tg_id] = True
 
     msg = await message.answer(
-        "🎙 <b>Бот не умеет расшифровывать голосовые сообщения.</b>\n\n"
-        "Пожалуйста, используйте текстовый ввод.",
+        "🎙 <b>Голосовые и кружки не принимаются.</b>\n\n"
+        "Для обращения в поддержку используйте кнопку ниже.",
         parse_mode="HTML",
+        disable_notification=True,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💬 Написать в поддержку", callback_data="menu_support")]
+        ]),
     )
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
 
 @router.message(F.sticker)
 async def catch_sticker_global(message: Message, state: FSMContext):
-    """Стикеры запрещены везде."""
+    """Стикеры запрещены везде вне FSM."""
     current_state = await state.get_state()
     if current_state is not None:
+        return
+
+    tg_id = message.from_user.id
+    if tg_id in settings.admin_ids:
         return
 
     try:
@@ -652,25 +687,31 @@ async def catch_sticker_global(message: Message, state: FSMContext):
     except Exception:
         pass
 
-    tg_id = message.from_user.id
     if tg_id in _notification_cache:
         return
     _notification_cache[tg_id] = True
 
     msg = await message.answer(
-        " <b>Стикеры не поддерживаются.</b>\n\nИспользуйте текстовый ввод или кнопки меню.",
+        "🙅 <b>Стикеры не принимаются.</b>\n\n"
+        "Для обращения в поддержку используйте кнопку ниже.",
         parse_mode="HTML",
+        disable_notification=True,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💬 Написать в поддержку", callback_data="menu_support")]
+        ]),
     )
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
 
 @router.message(F.photo | F.video | F.animation | F.document | F.contact | F.location)
 async def catch_media_global(message: Message, state: FSMContext):
-    """Медиа запрещены везде, кроме PaymentSG.waiting_screenshot (он перехватит раньше)."""
+    """Медиа вне FSM — удаляем и показываем плашку."""
     current_state = await state.get_state()
     if current_state is not None:
-        # Если в FSM — значит это какой-то другой FSM, не оплата
-        # Пропускаем — возможно там свой хендлер
+        return
+
+    tg_id = message.from_user.id
+    if tg_id in settings.admin_ids:
         return
 
     try:
@@ -678,14 +719,15 @@ async def catch_media_global(message: Message, state: FSMContext):
     except Exception:
         pass
 
-    tg_id = message.from_user.id
     if tg_id in _notification_cache:
         return
     _notification_cache[tg_id] = True
 
     msg = await message.answer(
-        "📸 <b>В этом разделе нельзя отправлять медиа.</b>\n\nИспользуйте кнопки меню.",
+        "📎 <b>Сообщение не принято.</b>\n\n"
+        "Для обращения в поддержку используйте кнопку ниже.",
         parse_mode="HTML",
+        disable_notification=True,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💬 Написать в поддержку", callback_data="menu_support")]
         ]),
@@ -695,10 +737,13 @@ async def catch_media_global(message: Message, state: FSMContext):
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def catch_text_global(message: Message, session: AsyncSession, state: FSMContext):
-    """Текст запрещён вне FSM-состояний."""
+    """Произвольный текст вне FSM — удаляем и показываем плашку."""
     current_state = await state.get_state()
     if current_state is not None:
-        # В FSM — пропускаем, там свои хендлеры
+        return
+
+    tg_id = message.from_user.id
+    if tg_id in settings.admin_ids:
         return
 
     try:
@@ -706,13 +751,15 @@ async def catch_text_global(message: Message, session: AsyncSession, state: FSMC
     except Exception:
         pass
 
-    tg_id = message.from_user.id
     if tg_id in _notification_cache:
         return
     _notification_cache[tg_id] = True
 
     msg = await message.answer(
-        " Для общения с поддержкой откройте раздел через меню.",
+        "💬 <b>Бот работает через кнопки меню.</b>\n\n"
+        "Если нужна помощь — обратитесь в поддержку.",
+        parse_mode="HTML",
+        disable_notification=True,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💬 Написать в поддержку", callback_data="menu_support")]
         ]),

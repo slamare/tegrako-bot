@@ -95,7 +95,7 @@ async def apply_promo(message: Message, session: AsyncSession, state: FSMContext
     promo, error = await dal.validate_promo(session, message.text.strip(), data.get("tariff_id"))
     if error:
         await cleanup_fsm_interaction(message, state)
-        msg = await message.answer(f"❌ {error}")
+        msg = await message.answer(f"❌ {error}", disable_notification=True)
         asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
         return
     new_amount = await dal.apply_promo_discount(promo, data.get("amount", 0))
@@ -107,7 +107,7 @@ async def apply_promo(message: Message, session: AsyncSession, state: FSMContext
     kb_rows = [[InlineKeyboardButton(text=req["label"], callback_data=f"req:{i}")] for i, req in enumerate(requisites)]
     kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="menu_buy")])
     kb_rows.append([InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")])
-    msg = await message.answer(f"✅ Промокод <b>{promo.code}</b> применён! Скидка: {disc}\n💰 Итого: <b>{int(new_amount)} ₽</b>\n\nВыберите способ оплаты:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+    msg = await message.answer(f"✅ Промокод <b>{promo.code}</b> применён! Скидка: {disc}\n💰 Итого: <b>{int(new_amount)} ₽</b>\n\nВыберите способ оплаты:", parse_mode="HTML", disable_notification=True, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
 # ── Реквизиты ─────────────────────────────────────────────────────────────────
@@ -172,7 +172,7 @@ async def receive_screenshot(message: Message, session: AsyncSession, state: FSM
         except: pass
     await cleanup_fsm_interaction(message, state)
     from bot.keyboards.user_kb import main_menu_kb
-    msg = await message.answer("✅ <b>Скриншот получен!</b>\n\nПлатёж отправлен на проверку. Обычно до 30 минут.\nПосле подтверждения получите уведомление.", parse_mode="HTML", reply_markup=main_menu_kb(is_admin=message.from_user.id in settings.admin_ids))
+    msg = await message.answer("✅ <b>Скриншот получен!</b>\n\nПлатёж отправлен на проверку. Обычно до 30 минут.\nПосле подтверждения получите уведомление.", parse_mode="HTML", disable_notification=True, reply_markup=main_menu_kb(is_admin=message.from_user.id in settings.admin_ids))
     await state.clear()
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
@@ -183,7 +183,7 @@ async def wrong_format(message: Message, state: FSMContext):
         text = " <b>Бот не умеет расшифровывать голосовые сообщения.</b>"
     else:
         text = "📸 <b>Ожидается только фото скриншота.</b>\n\nПожалуйста, отправьте изображение."
-    msg = await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 Написать в поддержку", callback_data="menu_support")]]))
+    msg = await message.answer(text, parse_mode="HTML", disable_notification=True, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 Написать в поддержку", callback_data="menu_support")]]))
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
 # ── Продление из профиля ──────────────────────────────────────────────────────

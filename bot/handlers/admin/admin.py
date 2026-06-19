@@ -277,6 +277,7 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
             await callback.bot.send_message(
                 user.telegram_id,
                 "✅ <b>Лимит устройств увеличен!</b>\n\nТеперь вы можете подключить ещё одно устройство.",
+                disable_notification=True,
                 parse_mode="HTML",
             )
         else:
@@ -327,6 +328,7 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
                             f"Ваш друг @{user.username or user.telegram_id} оплатил подписку.\n"
                             f"Вам начислено <b>+{ref_days} дней</b>.",
                             parse_mode="HTML",
+                            disable_notification=True,
                         )
                     except Exception:
                         pass
@@ -335,8 +337,10 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
                 user.telegram_id,
                 f"✅ <b>Оплата подтверждена!</b>\n\nТариф: {tariff.name} ({tariff.duration_days} дн.)\n"
                 f"Перейдите в Личный кабинет → Моя подписка.",
-                parse_mode="HTML", reply_markup=main_menu_kb(),
+                parse_mode="HTML",
+                disable_notification=True,
             )
+
 
         if callback.message.photo:
             await callback.message.edit_caption(
@@ -370,6 +374,7 @@ async def reject_payment(callback: CallbackQuery, session: AsyncSession):
     await callback.bot.send_message(
         payment.user.telegram_id,
         "❌ <b>Оплата отклонена.</b>\nЕсли считаете ошибкой — обратитесь в поддержку.",
+        disable_notification=True,
         parse_mode="HTML",
     )
 
@@ -482,6 +487,7 @@ async def send_ticket_reply(message: Message, session: AsyncSession, state: FSMC
         await message.bot.send_message(
             ticket.user.telegram_id,
             f"💬 <b>Ответ поддержки (Тикет #{ticket.id}):</b>\n\n{message.text}",
+            disable_notification=True,
             parse_mode="HTML",
         )
         msg = await message.answer("✅ Ответ отправлен.")
@@ -505,6 +511,7 @@ async def close_ticket(callback: CallbackQuery, session: AsyncSession):
         await callback.bot.send_message(
             ticket.user.telegram_id,
             f"✅ Тикет #{ticket_id} закрыт. Если вопрос остался — создайте новый.",
+            disable_notification=True,
         )
     except Exception:
         pass
@@ -1584,10 +1591,10 @@ async def send_broadcast(message: Message, session: AsyncSession, state: FSMCont
 
 @router.message(F.voice | F.video_note | F.sticker)
 async def catch_voice_in_fsm(message: Message, state: FSMContext):
-    """Если админ в FSM и отправил голосовое/стикер — показываем плашку."""
+    """Голосовые, кружки и стикеры в FSM — удаляем, показываем подсказку."""
     current_state = await state.get_state()
     if current_state is None:
-        return  # Вне FSM — не трогаем
+        return
 
     try:
         await message.delete()
@@ -1595,9 +1602,35 @@ async def catch_voice_in_fsm(message: Message, state: FSMContext):
         pass
 
     if message.voice or message.video_note:
-        text = "🎙 <b>Бот не умеет расшифровывать голосовые сообщения.</b>\n\nПожалуйста, используйте текстовый ввод."
+        text = "🎙 Голосовые и кружки не принимаются. Используйте текстовый ввод."
     else:
-        text = "📎 <b>Стикеры не поддерживаются.</b>\n\nПожалуйста, используйте текстовый ввод."
+        text = "📎 Стикеры не принимаются. Используйте текстовый ввод."
 
-    msg = await message.answer(text, parse_mode="HTML")
+    msg = await message.answer(text, parse_mode="HTML", disable_notification=True)
+    asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
+
+
+@router.message(
+    F.photo | F.video | F.animation | F.document | F.contact | F.location
+)
+async def catch_media_in_fsm(message: Message, state: FSMContext):
+    """Медиа в FSM-состояниях — удаляем, просим текст."""
+    current_state = await state.get_state()
+    if current_state is None:
+        return
+
+    # В AdminSG.broadcast_text можно отправить фото — пропускаем
+    from bot.states.states import AdminSG
+    if current_state == AdminSG.broadcast_text:
+        return
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    msg = await message.answer(
+        "📎 Здесь ожидается текстовый ввод. Медиафайлы не принимаются.",
+        disable_notification=True,
+    )
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))

@@ -30,9 +30,12 @@ async def check_expiring_subscriptions(bot: Bot):
 
                 if status == "EXPIRED":
                     if not await dal.was_notified(session, user.id, "expired"):
-                        await bot.send_message(user.telegram_id,
+                        await bot.send_message(
+                            user.telegram_id,
                             "⚠️ <b>Ваша подписка истекла.</b>\n\nОформите новую — нажмите «🛒 Купить подписку».",
-                            parse_mode="HTML")
+                            parse_mode="HTML",
+                            disable_notification=True,
+                        )
                         await dal.log_notification(session, user.id, "expired")
 
                 elif status == "ACTIVE":
@@ -41,10 +44,13 @@ async def check_expiring_subscriptions(bot: Bot):
                             meta = f"days_{d}"
                             if not await dal.was_notified(session, user.id, "expiring_soon", meta):
                                 word = "день" if d == 1 else "дня" if d < 5 else "дней"
-                                await bot.send_message(user.telegram_id,
+                                await bot.send_message(
+                                    user.telegram_id,
                                     f"⏰ <b>Подписка истекает через {d} {word}!</b>\n\n"
                                     f"Продлите — нажмите «🛒 Купить подписку».",
-                                    parse_mode="HTML")
+                                    parse_mode="HTML",
+                                    disable_notification=True,
+                                )
                                 await dal.log_notification(session, user.id, "expiring_soon", meta)
 
             except Exception as e:
@@ -87,6 +93,7 @@ async def revoke_expired_mtproto(bot: Bot):
                             "Подписка не оплачена более 5 дней. "
                             "После продления прокси восстановится автоматически.",
                             parse_mode="HTML",
+                            disable_notification=True,
                         )
                     except Exception:
                         pass
