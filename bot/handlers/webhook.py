@@ -1,10 +1,3 @@
-"""
-Webhook-обработчик событий Remnawave.
-
-Панель шлёт POST /webhook с заголовками:
-  X-Remnawave-Signature: HMAC-SHA256(secret, raw_body) в hex
-  X-Remnawave-Timestamp: ISO timestamp
-"""
 import hashlib
 import hmac
 import json
@@ -19,11 +12,7 @@ from db import dal
 
 logger = logging.getLogger(__name__)
 
-USER_EXPIRED_EVENTS = {
-    "user.expired",
-    "user.limited",
-    "user.disabled",
-}
+USER_EXPIRED_EVENTS = {"user.expired", "user.limited", "user.disabled"}
 USER_EXPIRING_EVENTS = {
     "user.expires_in_24_hours": 1,
     "user.expires_in_48_hours": 2,
@@ -75,8 +64,8 @@ async def _handle_user_event(bot: Bot, event: str, data: dict):
     if not tg_id:
         return
 
-    from db.database import async_session_maker as _sm
-    async with _sm() as session:
+    from db.database import async_session_maker
+    async with async_session_maker() as session:
         user = await dal.get_user(session, tg_id)
         if not user:
             return
@@ -117,8 +106,7 @@ async def _handle_user_event(bot: Bot, event: str, data: dict):
 
 
 async def _maybe_revoke_mtproto(bot: Bot, user, data: dict):
-    mtproto_secret = getattr(user, "mtproto_secret", None)
-    if not mtproto_secret:
+    if not getattr(user, "mtproto_secret", None):
         return
 
     expire_str = data.get("expireAt", "")
@@ -136,10 +124,10 @@ async def _maybe_revoke_mtproto(bot: Bot, user, data: dict):
         from sqlalchemy import update as sa_update
         from db.models import User
         from bot.services import telemt as telemt_svc
+        from db.database import async_session_maker
 
         telemt_svc.remove_user(user.remnawave_username)
-        from db.database import async_session_maker as _sm
-    async with _sm() as session:
+        async with async_session_maker() as session:
             await session.execute(
                 sa_update(User)
                 .where(User.telegram_id == user.telegram_id)
