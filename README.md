@@ -1,270 +1,211 @@
-<img width="1920" height="919" alt="screencapture-file-E-tegrako-monument-2-html-2026-05-18-18_03_00" src="https://github.com/user-attachments/assets/443415fc-82b1-4011-9634-72071de3f9d1" />
+<img width="1920" height="919" alt="tegrako-bot" src="https://github.com/user-attachments/assets/443415fc-82b1-4011-9634-72071de3f9d1" />
 
 # Tegrako Bot
 
-Telegram-бот для работы с Remnawave.
-
-Позволяет управлять пользователями, подписками и сервисными задачами прямо через Telegram без необходимости постоянно заходить в панель.
+Telegram-бот для TegrakoVPN на базе Remnawave. Управляет подписками, платежами, поддержкой и MTProto-прокси прямо из Telegram.
 
 ---
 
-## 🚀 Возможности
+## Возможности
 
-### Пользователь
+**Пользователь**
+- Регистрация, личный кабинет, история платежей
+- Покупка и продление подписки, выбор тарифа
+- Управление устройствами (HWID)
+- MTProto-прокси с автопровизионингом
+- Реферальная программа с бонусными днями
+- Поддержка через тикеты
 
-- `/start`
-- управление подпиской
-- взаимодействие с сервисом через Telegram
-- обращения в поддержку
-- работа с личными данными
+**Администратор**
+- Управление тарифами (цена, трафик, устройства, сквад, триал)
+- Подтверждение/отклонение платежей по скриншоту
+- Ответы на тикеты, ручное закрытие
+- Управление нодами Remnawave
+- Рассылка по сегментам (все / активные / истёкшие)
+- Статистика выручки и пользователей
+- Режим технических работ
 
-### Администратор
-
-- административные команды
-- управление пользователями
-- модерация
-- проверка ограничений
-
-### Сервисное
-
-- интеграция с Remnawave API
-- PostgreSQL
-- фоновые задачи через scheduler
-- middleware
-- Docker deployment
+**Сервисное**
+- Вебхуки от Remnawave → мгновенные уведомления об истечении и лимитах
+- Bulk-запрос к панели в scheduler (один запрос вместо N по uuid)
+- Scheduler раз в 6 часов как fallback
+- Автоотзыв MTProto при просрочке > 5 дней
 
 ---
 
-## 🛠 Stack
+## Стек
 
-| Что | Используется |
+| | |
 |---|---|
-| Язык | Python 3.12 |
-| Telegram | aiogram 3 |
-| База | PostgreSQL |
-| ORM | SQLAlchemy |
-| API | Remnawave |
-| Контейнеры | Docker / Docker Compose |
+| Python | 3.12 |
+| Telegram | aiogram 3.26 |
+| Web | aiohttp (webhook-сервер) |
+| БД | PostgreSQL + SQLAlchemy async |
+| Панель | Remnawave (httpx, прямые запросы) |
+| Деплой | Docker Compose |
 
 ---
 
-## 📁 Структура проекта
+## Структура
 
-```bash
+```
 .
 ├── bot/
 │   ├── handlers/
-│   │   ├── user/
-│   │   └── admin/
+│   │   ├── user/        # start, payment, support, mtproto
+│   │   ├── admin/       # admin
+│   │   └── webhook.py   # события от Remnawave
 │   ├── middlewares/
 │   ├── services/
-│   ├── states/
-│   └── utils/
-│
-├── config/
+│   │   ├── remnawave.py
+│   │   ├── scheduler.py
+│   │   └── telemt.py
+│   ├── keyboards/
+│   └── states/
+├── config/settings.py
 ├── db/
+│   ├── models.py
+│   └── dal.py
 ├── main.py
 ├── Dockerfile
 ├── docker-compose.yml
-├── requirements.txt
-└── .env.example
+├── .env.example
+└── requirements.txt
 ```
 
 ---
 
-# ⚙️ Установка
+## Установка
 
-## 1. Установка Docker
-
-Перед запуском нужен Docker и Docker Compose.
-
-### Ubuntu / Debian
+### 1. Docker
 
 ```bash
-sudo apt update
-sudo apt install docker.io docker-compose-plugin -y
-sudo systemctl enable docker
-sudo systemctl start docker
+sudo apt update && sudo apt install docker.io docker-compose-plugin -y
+sudo systemctl enable --now docker
 ```
 
-### Проверка
+Если Remnawave уже стоит — Docker есть, шаг пропускай.
 
-```bash
-docker --version
-docker compose version
-```
-
-> [!NOTE]
-> Если Remnawave Panel устанавливалась по официальной инструкции:
->
-> https://docs.rw/docs/install/remnawave-panel
->
-> Docker уже должен быть установлен, этот шаг можно пропустить.
-
----
-
-## 2. Клонирование репозитория
+### 2. Клонирование
 
 ```bash
 git clone https://github.com/slamare/tegrako-bot
 cd tegrako-bot
 ```
 
----
-
-## 3. Настройка `.env`
-
-Создай файл:
+### 3. `.env`
 
 ```bash
 cp .env.example .env
+nano .env
 ```
 
-Заполни значения:
+Обязательные переменные:
 
 ```env
 BOT_TOKEN=
-
 ADMIN_IDS=
 
-DATABASE_URL=
+DATABASE_URL=postgresql+asyncpg://tegrakobot:password@db:5432/tegrakobot
+POSTGRES_PASSWORD=
 
-REMNAWAVE_URL=
-REMNAWAVE_TOKEN=
+PANEL_API_URL=https://your-panel-domain.com
+PANEL_API_KEY=
+DEFAULT_SQUAD_UUID=
+
+BOT_NAME=TegrakoVPN
+
+# Реквизиты оплаты: "Название|Реквизиты" через ;
+PAYMENT_REQUISITES=
+
+NOTIFY_EXPIRY_DAYS=3,1
+
+# Вебхуки от Remnawave (секрет должен совпадать с WEBHOOK_SECRET_HEADER в панели)
+WEBHOOK_SECRET=
+WEBHOOK_PORT=9090
 ```
 
----
+Опциональные:
 
-## 4. Проверка Docker network
+```env
+WELCOME_IMAGE_URL=
+DEVICE_SLOT_PRICE=0
 
-В `docker-compose.yml` используется внешняя сеть:
-
-```yaml
-remnawave-network:
-  external: true
+# MTProto прокси (telemt)
+TELEMT_CONFIG_PATH=/opt/telemt/config/telemt.toml
+TELEMT_API_URL=http://host.docker.internal:9091
+TELEMT_PUBLIC_HOST=
+TELEMT_PUBLIC_PORT=8443
 ```
 
-Проверка:
+### 4. Docker network
+
+Бот должен быть в одной сети с Remnawave:
 
 ```bash
-docker network ls
+docker network ls | grep remnawave-network
 ```
 
-Если сети нет:
+Если нет:
 
 ```bash
 docker network create remnawave-network
 ```
 
----
-
-## 5. Запуск
+### 5. Запуск
 
 ```bash
 docker compose up -d --build
 ```
 
-Проверка:
+---
+
+## Вебхуки Remnawave
+
+Бот слушает события панели на порту `9090`. Remnawave шлёт `POST /webhook` с заголовком `X-Webhook-Secret`.
+
+В `/opt/remnawave/.env`:
+
+```env
+WEBHOOK_ENABLED=true
+WEBHOOK_URL=http://tegrakobot:9090/webhook
+WEBHOOK_SECRET_HEADER=<тот же секрет что в WEBHOOK_SECRET бота>
+```
+
+Обрабатываемые события: `user.expired`, `user.limited`, `user.disabled`, `user.expires_in_24/48/72_hours`.
+
+---
+
+## Обновление
 
 ```bash
-docker ps
+cd /opt/tegrakobot
+git stash && git pull && git stash drop
+docker compose build --no-cache tegrakobot && docker compose up -d tegrakobot
 ```
 
 ---
 
-# 📜 Логи
-
-### Все сервисы
+## Логи
 
 ```bash
-docker compose logs -f
-```
-
-### Только бот
-
-```bash
-docker logs tegrabot -f
+docker logs tegrakobot -f
 ```
 
 ---
 
-# 🗄 PostgreSQL
+## Диагностика
 
-Данные сохраняются в volume:
+**Бот не отвечает** — проверь `BOT_TOKEN`, контейнер запущен (`docker ps`), сеть доступна.
 
-```bash
-tegrabot-db-data
-```
+**502 от панели** — панель ещё поднимается, подожди 30 сек, проверь `docker logs remnawave`.
 
-Проверка:
+**Вебхук возвращает 403** — секрет в боте и панели не совпадают.
 
-```bash
-docker volume ls
-```
+**Ошибка БД** — проверь `DATABASE_URL` и что контейнер `tegrakobot-db` жив.
 
 ---
-
-# 🔗 Работа с Remnawave
-
-Бот подключается к панели через API.
-
-Проверь:
-
-- корректный `REMNAWAVE_URL`
-- актуальный `REMNAWAVE_TOKEN`
-- контейнер панели подключён к `remnawave-network`
-
----
-
-# 🔄 Обновление
-
-```bash
-git pull
-docker compose up -d --build
-```
-
----
-
-# 🧩 Если что-то не работает
-
-## Бот не отвечает
-
-Проверь:
-
-- `BOT_TOKEN`
-- контейнер поднят
-- доступ к интернету
-
----
-
-## Ошибка базы данных
-
-Проверь:
-
-- `DATABASE_URL`
-- PostgreSQL контейнер работает
-
----
-
-## Нет подключения к Remnawave
-
-Проверь:
-
-- URL панели
-- API токен
-- docker network
-
----
-
-## Контейнер завершился
-
-```bash
-docker compose logs -f
-```
-
----
-
 
 ## License
 
-This project is licensed under the GLWTPL - see the [GLWTPL](https://github.com/me-shaon/GLWTPL/) file for details.
+[GLWTPL](https://github.com/me-shaon/GLWTPL/)
