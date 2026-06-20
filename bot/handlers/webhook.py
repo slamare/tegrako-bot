@@ -7,6 +7,7 @@ Webhook-обработчик событий Remnawave.
 """
 import hashlib
 import hmac
+import json
 import logging
 from datetime import datetime, timezone, timedelta
 
