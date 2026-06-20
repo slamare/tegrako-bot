@@ -5,32 +5,35 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # ── Telegram ───────────────────────────────────────────────────────────
+    # Telegram
     BOT_TOKEN: str
-    ADMIN_IDS: str  # "123456,789012" через запятую
+    ADMIN_IDS: str
 
-    # ── Database ───────────────────────────────────────────────────────────
-    DATABASE_URL: str  # postgresql+asyncpg://user:pass@host/dbname
+    # Database
+    DATABASE_URL: str
 
-    # ── Remnawave panel ────────────────────────────────────────────────────
+    # Remnawave panel
     PANEL_API_URL: str
     PANEL_API_KEY: str
     DEFAULT_SQUAD_UUID: Optional[str] = None
 
-    # ── Bot UI ─────────────────────────────────────────────────────────────
+    # Bot UI
     BOT_NAME: str = "TegraVPN"
     WELCOME_IMAGE_URL: Optional[str] = None
     SUPPORT_LINK: Optional[str] = None
 
-    # ── Payment requisites ─────────────────────────────────────────────────
-    # Формат: "Название|Реквизиты" через ;
+    # Payment
     PAYMENT_REQUISITES: str = ""
-
-    # Цена за дополнительный слот устройства (₽)
     DEVICE_SLOT_PRICE: float = 0.0
 
-    # ── Notifications ──────────────────────────────────────────────────────
+    # Notifications
     NOTIFY_EXPIRY_DAYS: str = "3,1"
+
+    # Webhook от Remnawave → бот
+    # Секрет задаётся в панели и здесь: /api/webhook?secret=<WEBHOOK_SECRET>
+    WEBHOOK_SECRET: Optional[str] = None
+    # Порт, на котором бот слушает вебхуки панели (не Telegram-вебхук)
+    WEBHOOK_PORT: int = 9090
 
     @property
     def admin_ids(self) -> list[int]:
