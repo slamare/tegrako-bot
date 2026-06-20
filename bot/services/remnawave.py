@@ -501,3 +501,15 @@ async def get_hosts() -> list[HostInfo]:
             ]
     except Exception:
         return []
+
+
+async def get_all_users_bulk() -> list[UserInfo]:
+    """Один запрос — все пользователи. Используется в scheduler вместо N запросов."""
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.get(_url("/users?limit=10000"), headers=_headers(), timeout=30)
+            data = resp.json()
+            users = data.get("response", {}).get("users", [])
+            return [_parse_user(u) for u in users]
+    except Exception:
+        return []
