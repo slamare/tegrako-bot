@@ -1,8 +1,7 @@
 """
 Webhook-обработчик событий Remnawave.
 
-Панель шлёт POST на /webhook?secret=<WEBHOOK_SECRET>.
-Мы проверяем секрет и обрабатываем нужные события.
+Панель шлёт POST /webhook с заголовком X-Webhook-Secret.
 """
 import logging
 from datetime import datetime, timezone, timedelta
@@ -13,11 +12,9 @@ from aiogram import Bot
 from config.settings import settings
 from db.database import async_session_maker
 from db import dal
-from bot.services import remnawave
 
 logger = logging.getLogger(__name__)
 
-# События, которые нас интересуют
 USER_EXPIRED_EVENTS = {
     "user.expired",
     "user.limited",
@@ -31,16 +28,20 @@ USER_EXPIRING_EVENTS = {
 
 
 async def handle_webhook(request: web.Request) -> web.Response:
-    # Проверяем секрет
-    secret = request.rel_url.query.get("secret", "")
-    if settings.WEBHOOK_SECRET and secret != settings.WEBHOOK_SECRET:
-        logger.warning(f"Webhook: bad secret from {request.remote}")
-        return web.Response(status=403)
+    # Панель шлёт секрет в заголовке X-Webhook-Secret
+    if settings.WEBHOOK_SECRET:
+        secret = request.headers.get("X-Webhook-Secret", "")
+        if secret != settings.WEBHOOK_SECRET:
+            logger.warning(f"Webhook: bad secret from {request.remote}")
+            return web.Response(status=403)
 
     try:
         payload = await request.json()
     except Exception:
+        logger.warning("Webhook: bad JSON")
         return web.Response(status=400)
+
+    logger.info(f"Webhook received: {payload.get('event')} scope={payload.get('scope')}")
 
     scope = payload.get("scope", "")
     event = payload.get("event", "")
@@ -48,8 +49,11 @@ async def handle_webhook(request: web.Request) -> web.Response:
 
     bot: Bot = request.app["bot"]
 
-    if scope == "user":
-        await _handle_user_event(bot, event, data)
+    try:
+        if scope == "user":
+            await _handle_user_event(bot, event, data)
+    except Exception as e:
+        logger.error(f"Webhook handler error: {e}", exc_info=True)
 
     return web.Response(status=200)
 
@@ -64,21 +68,23 @@ async def _handle_user_event(bot: Bot, event: str, data: dict):
         if not user:
             return
 
-        # Подписка истекла / заблокирована / лимит трафика
         if event in USER_EXPIRED_EVENTS:
-            if not await dal.was_notified(session, user.id, f"wh_{event}"):
-                text = _expired_text(event)
+            notif_key = f"wh_{event}"
+            if not await dal.was_notified(session, user.id, notif_key):
                 try:
-                    await bot.send_message(tg_id, text, parse_mode="HTML", disable_notification=True)
+                    await bot.send_message(
+                        tg_id,
+                        _expired_text(event),
+                        parse_mode="HTML",
+                        disable_notification=True,
+                    )
                 except Exception as e:
                     logger.warning(f"Webhook notify failed for {tg_id}: {e}")
-                await dal.log_notification(session, user.id, f"wh_{event}")
+                await dal.log_notification(session, user.id, notif_key)
 
-            # Если истекла и есть MTProto — отзываем сразу (без ожидания 5 дней если уже давно)
             if event == "user.expired":
                 await _maybe_revoke_mtproto(bot, user, data)
 
-        # Скоро истекает
         elif event in USER_EXPIRING_EVENTS:
             days = USER_EXPIRING_EVENTS[event]
             meta = f"wh_days_{days}"
@@ -99,11 +105,9 @@ async def _handle_user_event(bot: Bot, event: str, data: dict):
 
 async def _maybe_revoke_mtproto(bot: Bot, user, data: dict):
     """Отзывает MTProto если подписка истекла > 5 дней назад."""
-    from sqlalchemy import update as sa_update
-    from db.models import User
-    from bot.services import telemt as telemt_svc
-
-    if not user.mtproto_secret:
+    # Безопасно проверяем наличие поля — может не быть в старых версиях модели
+    mtproto_secret = getattr(user, "mtproto_secret", None)
+    if not mtproto_secret:
         return
 
     expire_str = data.get("expireAt", "")
@@ -114,11 +118,14 @@ async def _maybe_revoke_mtproto(bot: Bot, user, data: dict):
     except Exception:
         return
 
-    now = datetime.now(timezone.utc)
-    if (now - expire_at) < timedelta(days=5):
+    if (datetime.now(timezone.utc) - expire_at) < timedelta(days=5):
         return
 
     try:
+        from sqlalchemy import update as sa_update
+        from db.models import User
+        from bot.services import telemt as telemt_svc
+
         telemt_svc.remove_user(user.remnawave_username)
         async with async_session_maker() as session:
             await session.execute(
