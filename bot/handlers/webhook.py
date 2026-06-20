@@ -15,7 +15,6 @@ from aiohttp import web
 from aiogram import Bot
 
 from config.settings import settings
-from db.database import async_session_maker
 from db import dal
 
 logger = logging.getLogger(__name__)
@@ -76,7 +75,8 @@ async def _handle_user_event(bot: Bot, event: str, data: dict):
     if not tg_id:
         return
 
-    async with async_session_maker() as session:
+    from db.database import async_session_maker as _sm
+    async with _sm() as session:
         user = await dal.get_user(session, tg_id)
         if not user:
             return
@@ -138,7 +138,8 @@ async def _maybe_revoke_mtproto(bot: Bot, user, data: dict):
         from bot.services import telemt as telemt_svc
 
         telemt_svc.remove_user(user.remnawave_username)
-        async with async_session_maker() as session:
+        from db.database import async_session_maker as _sm
+    async with _sm() as session:
             await session.execute(
                 sa_update(User)
                 .where(User.telegram_id == user.telegram_id)
