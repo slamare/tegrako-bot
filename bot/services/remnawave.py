@@ -463,14 +463,21 @@ async def get_inbounds() -> list[dict]:
     try:
         async with httpx.AsyncClient(verify=True) as client:
             resp = await client.get(_url("/config-profiles/inbounds"), headers=_headers(), timeout=10)
-            logger.info(f"[inbounds] status={resp.status_code} body={resp.text[:200]}")
+            logger.info(f"[inbounds] status={resp.status_code}")
+            logger.info(f"[inbounds] RAW: {resp.text}")
             if resp.status_code != 200:
                 return []
-            
             data = resp.json()
-            # Ответ имеет структуру: {"response": {"total": ..., "inbounds": [...]}}
-            return data.get("response", {}).get("inbounds", [])
-    except Exception:
+            # Пробуем разные варианты структуры
+            if isinstance(data.get("response"), list):
+                return data["response"]
+            if isinstance(data.get("response"), dict):
+                return data["response"].get("inbounds", data["response"].get("data", []))
+            if "inbounds" in data:
+                return data["inbounds"]
+            return []
+    except Exception as e:
+        logger.error(f"[inbounds] error: {e}")
         return []
 
 async def get_hosts() -> list[dict]:
