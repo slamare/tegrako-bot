@@ -459,7 +459,7 @@ async def restart_node(node_uuid: str) -> bool:
 
 # ── Inbounds & Hosts ───────────────────────────────────────────────────────
 
-async def get_inbounds() -> list[dict]:
+async def get_inbounds() -> list[InboundInfo]:
     try:
         async with httpx.AsyncClient(verify=True) as client:
             resp = await client.get(_url("/config-profiles/inbounds"), headers=_headers(), timeout=10)
@@ -468,15 +468,25 @@ async def get_inbounds() -> list[dict]:
             data = resp.json()
             raw = data.get("response", {})
             if isinstance(raw, dict):
-                return raw.get("inbounds", [])
-            if isinstance(raw, list):
-                return raw
-            return []
+                items = raw.get("inbounds", [])
+            elif isinstance(raw, list):
+                items = raw
+            else:
+                return []
+            return [
+                InboundInfo(
+                    uuid=i["uuid"],
+                    tag=i.get("tag", ""),
+                    type=i.get("type", ""),
+                    is_enabled=i.get("isEnabled", True),
+                )
+                for i in items
+            ]
     except Exception:
         return []
 
 
-async def get_hosts() -> list[dict]:
+async def get_hosts() -> list[HostInfo]:
     try:
         async with httpx.AsyncClient(verify=True) as client:
             resp = await client.get(_url("/hosts"), headers=_headers(), timeout=10)
@@ -484,9 +494,19 @@ async def get_hosts() -> list[dict]:
                 return []
             data = resp.json()
             raw = data.get("response", [])
-            if isinstance(raw, list):
-                return raw
-            return []
+            if not isinstance(raw, list):
+                return []
+            return [
+                HostInfo(
+                    uuid=h["uuid"],
+                    remark=h.get("remark", ""),
+                    address=h.get("address", ""),
+                    port=h.get("port", 0),
+                    inbound_uuid=h.get("inboundUuid", ""),
+                    is_enabled=h.get("isEnabled", True),
+                )
+                for h in raw
+            ]
     except Exception:
         return []
 
@@ -501,4 +521,5 @@ async def get_all_users_bulk() -> list[UserInfo]:
             return [_parse_user(u) for u in users]
     except Exception:
         return []
+
 
