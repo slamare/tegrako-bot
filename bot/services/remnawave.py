@@ -459,40 +459,33 @@ async def restart_node(node_uuid: str) -> bool:
 
 # ── Inbounds & Hosts ───────────────────────────────────────────────────────
 
-async def get_inbounds() -> list[dict]:
-    try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.get(_url("/config-profiles/inbounds"), headers=_headers(), timeout=10)
-            logger.info(f"[inbounds] status={resp.status_code}")
-            logger.info(f"[inbounds] RAW: {resp.text}")
-            if resp.status_code != 200:
-                return []
-            data = resp.json()
-            # Пробуем разные варианты структуры
-            if isinstance(data.get("response"), list):
-                return data["response"]
-            if isinstance(data.get("response"), dict):
-                return data["response"].get("inbounds", data["response"].get("data", []))
-            if "inbounds" in data:
-                return data["inbounds"]
-            return []
-    except Exception as e:
-        logger.error(f"[inbounds] error: {e}")
-        return []
-
-async def get_hosts() -> list[dict]:
-    try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.get(_url("/hosts"), headers=_headers(), timeout=10)
-            logger.info(f"[hosts] status={resp.status_code} body={resp.text[:200]}")
-            if resp.status_code != 200:
+    async def get_inbounds(self) -> list[dict]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self.base_url}/api/config-profiles/inbounds",
+                headers=self.headers
+            )
+            logger.info(f"[inbounds] status={response.status_code} body={response.text[:200]}")
+            if response.status_code != 200:
                 return []
             
-            data = resp.json()
+            data = response.json()
+            # Ответ имеет структуру: {"response": {"total": ..., "inbounds": [...]}}
+            return data.get("response", {}).get("inbounds", [])
+
+    async def get_hosts(self) -> list[dict]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self.base_url}/api/hosts",
+                headers=self.headers
+            )
+            logger.info(f"[hosts] status={response.status_code} body={response.text[:200]}")
+            if response.status_code != 200:
+                return []
+            
+            data = response.json()
             # Ответ имеет структуру: {"response": [{...}, {...}]}
             return data.get("response", [])
-    except Exception:
-        return []
 
 
 async def get_all_users_bulk() -> list[UserInfo]:
