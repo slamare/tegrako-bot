@@ -1590,32 +1590,41 @@ async def send_broadcast(message: Message, session: AsyncSession, state: FSMCont
     data = await state.get_data()
     target = data.get("broadcast_target", "all")
     users = await dal.get_all_users(session, only_registered=True)
-    sent = failed = 0
+
+    # Один bulk-запрос для фильтрации по статусу
+    panel_by_uuid: dict = {}
+    if target in ("active", "expired"):
+        panel_users = await remnawave.get_all_users_bulk()
+        panel_by_uuid = {u.uuid: u for u in panel_users}
+
+    targets = []
     for u in users:
         if u.telegram_id in settings.admin_ids:
             continue
         if target in ("active", "expired") and u.remnawave_uuid:
-            try:
-                rw = await remnawave.get_subscription_info(u.remnawave_uuid)
-                status = rw.status.value if rw else ""
-                if target == "active" and status != "ACTIVE":
-                    continue
-                if target == "expired" and status == "ACTIVE":
-                    continue
-            except Exception:
+            rw = panel_by_uuid.get(u.remnawave_uuid)
+            status = rw.status.value if rw else ""
+            if target == "active" and status != "ACTIVE":
                 continue
-        try:
-            await message.bot.send_message(u.telegram_id, message.text, parse_mode="HTML")
-            sent += 1
-        except Exception:
-            failed += 1
-    await cleanup_fsm_interaction(message, state)
-    msg = await message.answer(f"✅ Готово. Отправлено: {sent} | Ошибок: {failed}")
+            if target == "expired" and status == "ACTIVE":
+                continue
+        targets.append(u)
+
+    sent = failed = 0
+    sem = asyncio.Semaphore(25)
+
+    async def _send(u):
+        nonlocal sent, failed
+        async with sem:
+            try:
+                await message.bot.send_message(u.telegram_id, message.text, parse_mode="HTML")
+                sent += 1
+            except Exception:
+                failed += 1
+
+    await asyncio.gather(*[_send(u) for u in targets])
     await state.clear()
-    asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
-
-
-# ── Защита от голосовых и стикеров в FSM-состояниях ───────────────────────────
+    await message.answer(f"📢 Готово. ✅ {sent} | ❌ {failed}")
 
 @router.message(F.voice | F.video_note | F.sticker)
 async def catch_voice_in_fsm(message: Message, state: FSMContext):
