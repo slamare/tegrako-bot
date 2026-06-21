@@ -459,48 +459,33 @@ async def restart_node(node_uuid: str) -> bool:
 
 # ── Inbounds & Hosts ───────────────────────────────────────────────────────
 
-async def get_inbounds() -> list[InboundInfo]:
-    try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.get(_url("/inbounds"), headers=_headers(), timeout=10)
-            data = resp.json()
-            raw = data.get("response", [])
-            if isinstance(raw, dict):
-                raw = raw.get("inbounds", [])
-            return [
-                InboundInfo(
-                    uuid=i["uuid"],
-                    tag=i.get("tag", ""),
-                    type=i.get("type", ""),
-                    is_enabled=i.get("isEnabled", True),
-                )
-                for i in raw
-            ]
-    except Exception:
-        return []
+    async def get_inbounds(self) -> list[dict]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self.base_url}/api/config-profiles/inbounds",
+                headers=self.headers
+            )
+            logger.info(f"[inbounds] status={response.status_code} body={response.text[:200]}")
+            if response.status_code != 200:
+                return []
+            
+            data = response.json()
+            # Ответ имеет структуру: {"response": {"total": ..., "inbounds": [...]}}
+            return data.get("response", {}).get("inbounds", [])
 
-
-async def get_hosts() -> list[HostInfo]:
-    try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.get(_url("/hosts"), headers=_headers(), timeout=10)
-            data = resp.json()
-            raw = data.get("response", [])
-            if isinstance(raw, dict):
-                raw = raw.get("hosts", [])
-            return [
-                HostInfo(
-                    uuid=h["uuid"],
-                    remark=h.get("remark", ""),
-                    address=h.get("address", ""),
-                    port=h.get("port", 0),
-                    inbound_uuid=h.get("inboundUuid", ""),
-                    is_enabled=h.get("isEnabled", True),
-                )
-                for h in raw
-            ]
-    except Exception:
-        return []
+    async def get_hosts(self) -> list[dict]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self.base_url}/api/hosts",
+                headers=self.headers
+            )
+            logger.info(f"[hosts] status={response.status_code} body={response.text[:200]}")
+            if response.status_code != 200:
+                return []
+            
+            data = response.json()
+            # Ответ имеет структуру: {"response": [{...}, {...}]}
+            return data.get("response", [])
 
 
 async def get_all_users_bulk() -> list[UserInfo]:
