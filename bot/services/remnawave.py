@@ -459,33 +459,36 @@ async def restart_node(node_uuid: str) -> bool:
 
 # ── Inbounds & Hosts ───────────────────────────────────────────────────────
 
-    async def get_inbounds(self) -> list[dict]:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.base_url}/api/config-profiles/inbounds",
-                headers=self.headers
-            )
-            logger.info(f"[inbounds] status={response.status_code} body={response.text[:200]}")
-            if response.status_code != 200:
+async def get_inbounds() -> list[dict]:
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.get(_url("/config-profiles/inbounds"), headers=_headers(), timeout=10)
+            if resp.status_code != 200:
                 return []
-            
-            data = response.json()
-            # Ответ имеет структуру: {"response": {"total": ..., "inbounds": [...]}}
-            return data.get("response", {}).get("inbounds", [])
+            data = resp.json()
+            raw = data.get("response", {})
+            if isinstance(raw, dict):
+                return raw.get("inbounds", [])
+            if isinstance(raw, list):
+                return raw
+            return []
+    except Exception:
+        return []
 
-    async def get_hosts(self) -> list[dict]:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.base_url}/api/hosts",
-                headers=self.headers
-            )
-            logger.info(f"[hosts] status={response.status_code} body={response.text[:200]}")
-            if response.status_code != 200:
+
+async def get_hosts() -> list[dict]:
+    try:
+        async with httpx.AsyncClient(verify=True) as client:
+            resp = await client.get(_url("/hosts"), headers=_headers(), timeout=10)
+            if resp.status_code != 200:
                 return []
-            
-            data = response.json()
-            # Ответ имеет структуру: {"response": [{...}, {...}]}
-            return data.get("response", [])
+            data = resp.json()
+            raw = data.get("response", [])
+            if isinstance(raw, list):
+                return raw
+            return []
+    except Exception:
+        return []
 
 
 async def get_all_users_bulk() -> list[UserInfo]:
@@ -498,3 +501,4 @@ async def get_all_users_bulk() -> list[UserInfo]:
             return [_parse_user(u) for u in users]
     except Exception:
         return []
+
