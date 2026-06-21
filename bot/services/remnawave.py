@@ -460,13 +460,18 @@ async def restart_node(node_uuid: str) -> bool:
 # ── Inbounds & Hosts ───────────────────────────────────────────────────────
 
 async def get_inbounds() -> list[InboundInfo]:
+    import logging as _log
+    _logger = _log.getLogger(__name__)
     try:
         async with httpx.AsyncClient(verify=True) as client:
             resp = await client.get(_url("/inbounds"), headers=_headers(), timeout=10)
+            _logger.info(f"[inbounds] status={resp.status_code} body={resp.text[:500]}")
             data = resp.json()
             raw = data.get("response", [])
             if isinstance(raw, dict):
-                raw = raw.get("inbounds", [])
+                raw = raw.get("inbounds", []) or raw.get("data", [])
+            if not isinstance(raw, list):
+                raw = []
             return [
                 InboundInfo(
                     uuid=i["uuid"],
@@ -476,18 +481,25 @@ async def get_inbounds() -> list[InboundInfo]:
                 )
                 for i in raw
             ]
-    except Exception:
+    except Exception as e:
+        import logging as _log2
+        _log2.getLogger(__name__).error(f"[inbounds] error: {e}")
         return []
 
 
 async def get_hosts() -> list[HostInfo]:
+    import logging as _log
+    _logger = _log.getLogger(__name__)
     try:
         async with httpx.AsyncClient(verify=True) as client:
             resp = await client.get(_url("/hosts"), headers=_headers(), timeout=10)
+            _logger.info(f"[hosts] status={resp.status_code} body={resp.text[:500]}")
             data = resp.json()
             raw = data.get("response", [])
             if isinstance(raw, dict):
-                raw = raw.get("hosts", [])
+                raw = raw.get("hosts", []) or raw.get("data", [])
+            if not isinstance(raw, list):
+                raw = []
             return [
                 HostInfo(
                     uuid=h["uuid"],
@@ -499,7 +511,9 @@ async def get_hosts() -> list[HostInfo]:
                 )
                 for h in raw
             ]
-    except Exception:
+    except Exception as e:
+        import logging as _log2
+        _log2.getLogger(__name__).error(f"[hosts] error: {e}")
         return []
 
 
