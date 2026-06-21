@@ -1,153 +1,170 @@
-"""Webhook handler for Remnawave panel events."""
-import json
-import hmac
 import hashlib
+import hmac
+import json
 import logging
-from aiohttp import web
+from datetime import datetime, timezone, timedelta
 
-from db.database import async_session_maker
-from db import dal
+from aiohttp import web
+from aiogram import Bot
+
 from config.settings import settings
+from db import dal
 
 logger = logging.getLogger(__name__)
 
-_bot = None
+USER_EXPIRED_EVENTS = {"user.expired", "user.limited", "user.disabled"}
+USER_EXPIRING_EVENTS = {
+    "user.expires_in_24_hours": 1,
+    "user.expires_in_48_hours": 2,
+    "user.expires_in_72_hours": 3,
+}
 
 
-def set_bot(bot):
-    """Set bot instance for sending notifications."""
-    global _bot
-    _bot = bot
-
-
-def validate_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
-    """Validate Remnawave webhook signature using HMAC-SHA256."""
-    expected = hmac.new(
-        secret.encode("utf-8"),
-        body,
-        hashlib.sha256
-    ).hexdigest()
+def _verify_signature(secret: str, raw_body: bytes, signature: str) -> bool:
+    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
 
 
 async def handle_webhook(request: web.Request) -> web.Response:
-    """Handle incoming webhook from Remnawave panel."""
-    body = await request.read()
+    raw_body = await request.read()
 
-    # Validate HMAC signature
-    secret = settings.WEBHOOK_SECRET
-    if secret:
+    if settings.WEBHOOK_SECRET:
         signature = request.headers.get("X-Remnawave-Signature", "")
         if not signature:
             logger.warning(f"Webhook: missing signature from {request.remote}")
-            return web.Response(status=401, text="Missing signature")
-
-        if not validate_webhook_signature(body, signature, secret):
-            logger.warning(f"Webhook: bad secret from {request.remote}")
+            return web.Response(status=403, text="Missing signature")
+        if not _verify_signature(settings.WEBHOOK_SECRET, raw_body, signature):
+            logger.warning(f"Webhook: invalid signature from {request.remote}")
             return web.Response(status=403, text="Invalid signature")
 
     try:
-        payload = json.loads(body)
-    except json.JSONDecodeError:
-        logger.error("Webhook: invalid JSON")
-        return web.Response(status=400, text="Invalid JSON")
+        payload = json.loads(raw_body)
+    except Exception:
+        return web.Response(status=400, text="Bad JSON")
 
-    event = payload.get("event", "")
     scope = payload.get("scope", "")
-    data = payload.get("data", {})
+    event = payload.get("event", "")
+    data  = payload.get("data", {})
 
-    logger.info(f"Webhook received: {scope}.{event}")
+    logger.info(f"Webhook: scope={scope} event={event}")
 
-    if scope == "user":
-        await handle_user_event(event, data)
+    bot: Bot = request.app["bot"]
 
-    return web.Response(status=200, text="OK")
+    try:
+        if scope == "user":
+            await _handle_user_event(bot, event, data)
+    except Exception as e:
+        logger.error(f"Webhook handler error: {e}", exc_info=True)
+
+    return web.Response(status=200)
 
 
-async def handle_user_event(event: str, data: dict):
-    """Handle user-related webhook events."""
-    telegram_id = data.get("telegramId")
-    if not telegram_id:
-        logger.warning(f"Webhook user event without telegramId: {event}")
+async def _handle_user_event(bot: Bot, event: str, data: dict):
+    tg_id = data.get("telegramId")
+    if not tg_id:
         return
 
+    from db.database import async_session_maker
     async with async_session_maker() as session:
-        user = await dal.get_user(session, telegram_id)
+        user = await dal.get_user(session, tg_id)
         if not user:
-            logger.info(f"Webhook: user {telegram_id} not found in bot DB")
             return
 
-        # Event messages mapping
-        messages = {
-            "user.expired": (
-                "⚠️ <b>Ваша подписка истекла.</b>\n\n"
-                "Оформите новую — нажмите «🛒 Купить подписку».",
-                "expired",
-                None,
-            ),
-            "user.disabled": (
-                "⛔ <b>Ваша подписка отключена.</b>\n\n"
-                "Свяжитесь с поддержкой или оформите новую.",
-                "disabled",
-                None,
-            ),
-            "user.limited": (
-                "📉 <b>Трафик закончился.</b>\n\n"
-                "Подписка приостановлена до конца периода. "
-                "Докупите трафик или оформите новую.",
-                "limited",
-                None,
-            ),
-            "user.expires_in_24_hours": (
-                "⏳ <b>Подписка истекает через 24 часа.</b>\n\n"
-                "Не забудьте продлить — нажмите «🛒 Купить подписку».",
-                "expiring_soon",
-                "hours_24",
-            ),
-            "user.expires_in_48_hours": (
-                "⏳ <b>Подписка истекает через 48 часов.</b>\n\n"
-                "Не забудьте продлить — нажмите «🛒 Купить подписку».",
-                "expiring_soon",
-                "hours_48",
-            ),
-            "user.expires_in_72_hours": (
-                "⏳ <b>Подписка истекает через 72 часа.</b>\n\n"
-                "Не забудьте продлить — нажмите «🛒 Купить подписку».",
-                "expiring_soon",
-                "hours_72",
-            ),
-        }
+        if event in USER_EXPIRED_EVENTS:
+            notif_key = f"wh_{event}"
+            if not await dal.was_notified(session, user.id, notif_key):
+                try:
+                    await bot.send_message(
+                        tg_id,
+                        _expired_text(event),
+                        parse_mode="HTML",
+                        disable_notification=True,
+                    )
+                except Exception as e:
+                    logger.warning(f"Webhook notify failed for {tg_id}: {e}")
+                await dal.log_notification(session, user.id, notif_key)
 
-        msg_data = messages.get(event)
-        if not msg_data:
-            logger.info(f"Webhook: unhandled event {event} for user {telegram_id}")
-            return
+            if event == "user.expired":
+                await _maybe_revoke_mtproto(bot, user, data)
 
-        text, notif_type, meta = msg_data
-
-        # Check if already notified
-        if await dal.was_notified(session, user.id, notif_type, meta):
-            logger.info(f"Webhook: user {telegram_id} already notified for {event}")
-            return
-
-        # Send notification
-        try:
-            if _bot:
-                await _bot.send_message(
-                    user.telegram_id,
-                    text,
-                    parse_mode="HTML",
-                    disable_notification=True,
-                )
-                await dal.log_notification(session, user.id, notif_type, meta)
-                logger.info(f"Webhook: notified user {telegram_id} about {event}")
-        except Exception as e:
-            logger.error(f"Webhook: failed to notify user {telegram_id}: {e}")
+        elif event in USER_EXPIRING_EVENTS:
+            days = USER_EXPIRING_EVENTS[event]
+            meta = f"wh_days_{days}"
+            if not await dal.was_notified(session, user.id, "wh_expiring", meta):
+                word = "день" if days == 1 else "дня" if days < 5 else "дней"
+                try:
+                    await bot.send_message(
+                        tg_id,
+                        f"⏰ <b>Подписка истекает через {days} {word}!</b>\n\n"
+                        f"Продлите — нажмите «🛒 Купить подписку».",
+                        parse_mode="HTML",
+                        disable_notification=True,
+                    )
+                except Exception as e:
+                    logger.warning(f"Webhook expiring notify failed for {tg_id}: {e}")
+                await dal.log_notification(session, user.id, "wh_expiring", meta)
 
 
-def create_webhook_app(bot) -> web.Application:
-    """Create aiohttp application for webhook server."""
-    set_bot(bot)
+async def _maybe_revoke_mtproto(bot: Bot, user, data: dict):
+    if not getattr(user, "mtproto_secret", None):
+        return
+
+    expire_str = data.get("expireAt", "")
+    if not expire_str:
+        return
+    try:
+        expire_at = datetime.fromisoformat(expire_str.replace("Z", "+00:00"))
+    except Exception:
+        return
+
+    if (datetime.now(timezone.utc) - expire_at) < timedelta(days=5):
+        return
+
+    try:
+        from sqlalchemy import update as sa_update
+        from db.models import User
+        from bot.services import telemt as telemt_svc
+        from db.database import async_session_maker
+
+        telemt_svc.remove_user(user.remnawave_username)
+        async with async_session_maker() as session:
+            await session.execute(
+                sa_update(User)
+                .where(User.telegram_id == user.telegram_id)
+                .values(mtproto_secret=None)
+            )
+            await session.commit()
+        await bot.send_message(
+            user.telegram_id,
+            "📡 <b>MTProto прокси деактивирован.</b>\n\n"
+            "Подписка не оплачена более 5 дней. "
+            "После продления прокси восстановится автоматически.",
+            parse_mode="HTML",
+            disable_notification=True,
+        )
+    except Exception as e:
+        logger.warning(f"MTProto revoke via webhook failed for {user.telegram_id}: {e}")
+
+
+def _expired_text(event: str) -> str:
+    if event == "user.limited":
+        return (
+            "📊 <b>Трафик исчерпан.</b>\n\n"
+            "Лимит трафика достигнут. Оформите новую подписку — нажмите «🛒 Купить подписку»."
+        )
+    if event == "user.disabled":
+        return (
+            "⛔ <b>Подписка отключена.</b>\n\n"
+            "Если считаете ошибкой — обратитесь в поддержку."
+        )
+    return (
+        "⚠️ <b>Ваша подписка истекла.</b>\n\n"
+        "Оформите новую — нажмите «🛒 Купить подписку»."
+    )
+
+
+def create_webhook_app(bot: Bot) -> web.Application:
     app = web.Application()
+    app["bot"] = bot
     app.router.add_post("/webhook", handle_webhook)
     return app
