@@ -495,9 +495,8 @@ async def menu_proxy(callback: CallbackQuery, session: AsyncSession):
         )
         return
     from bot.services import telemt as telemt_svc
-    link = await telemt_svc.get_proxy_link(user.remnawave_username)
-    if not link:
-        link = telemt_svc.build_link_fallback(user.mtproto_secret)
+    # Ссылка детерминирована: секрет + хост + порт. API не нужен.
+    link = telemt_svc.build_link_fallback(user.mtproto_secret)
     if not link:
         await callback.answer("Не удалось получить ссылку.", show_alert=True)
         return
