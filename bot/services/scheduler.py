@@ -10,12 +10,9 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 
-async def check_expiring_subscriptions(bot: Bot):
-    """Один bulk-запрос к панели вместо N запросов по uuid."""
+async def check_expiring_subscriptions(bot: Bot, panel_by_uuid: dict):
+    """Проверяет истекающие подписки. panel_by_uuid передаётся снаружи."""
     from db.database import async_session_maker
-
-    panel_users = await remnawave.get_all_users_bulk()
-    panel_by_uuid = {u.uuid: u for u in panel_users}
 
     notify_days = settings.notify_expiry_days
     now = datetime.now(timezone.utc)
@@ -62,15 +59,12 @@ async def check_expiring_subscriptions(bot: Bot):
                 logger.warning(f"Notification check failed for {user.telegram_id}: {e}")
 
 
-async def revoke_expired_mtproto(bot: Bot):
+async def revoke_expired_mtproto(bot: Bot, panel_by_uuid: dict):
     """Удаляет из telemt пользователей с просроченной > 5 дней подпиской."""
     from sqlalchemy import update as sa_update
     from db.models import User
     from db.database import async_session_maker
     from bot.services import telemt as telemt_svc
-
-    panel_users = await remnawave.get_all_users_bulk()
-    panel_by_uuid = {u.uuid: u for u in panel_users}
 
     async with async_session_maker() as session:
         users = await dal.get_all_users(session, only_registered=True)
@@ -78,7 +72,7 @@ async def revoke_expired_mtproto(bot: Bot):
         grace = timedelta(days=5)
 
         for user in users:
-            if not user.mtproto_secret or not user.remnawave_uuid:
+            if not getattr(user, "mtproto_secret", None) or not user.remnawave_uuid:
                 continue
             rw = panel_by_uuid.get(user.remnawave_uuid)
             if not rw:
@@ -109,12 +103,17 @@ async def revoke_expired_mtproto(bot: Bot):
 
 
 async def scheduler(bot: Bot):
-    """Fallback-проверка каждые 6 часов — страховка если вебхук пропустил событие."""
+    """Fallback-проверка каждые 6 часов. Один bulk-запрос на весь цикл."""
     await asyncio.sleep(5)
     while True:
         try:
-            await check_expiring_subscriptions(bot)
-            await revoke_expired_mtproto(bot)
+            # Один запрос к панели — используем в обеих задачах
+            panel_users = await remnawave.get_all_users_bulk()
+            panel_by_uuid = {u.uuid: u for u in panel_users}
+            logger.info(f"Scheduler: loaded {len(panel_by_uuid)} users from panel")
+
+            await check_expiring_subscriptions(bot, panel_by_uuid)
+            await revoke_expired_mtproto(bot, panel_by_uuid)
         except Exception as e:
             logger.error(f"Scheduler error: {e}")
         await asyncio.sleep(6 * 3600)
