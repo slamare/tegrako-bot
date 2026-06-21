@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy import (
     BigInteger, Boolean, DateTime, ForeignKey,
-    Integer, Numeric, String, Text, func
+    Index, Integer, Numeric, String, Text, func
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -136,6 +136,10 @@ class Notification(Base):
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     meta: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     sent_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_notifications_user_type_sent", "user_id", "type", "sent_at"),
+    )
 
 
 class CustomMenuButton(Base):
