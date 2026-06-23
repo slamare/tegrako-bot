@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 
 
 async def check_expiring_subscriptions(bot: Bot, panel_by_uuid: dict):
-    """Проверяет истекающие подписки. panel_by_uuid передаётся снаружи."""
     from db.database import async_session_maker
 
     notify_days = settings.notify_expiry_days
@@ -19,7 +18,6 @@ async def check_expiring_subscriptions(bot: Bot, panel_by_uuid: dict):
 
     async with async_session_maker() as session:
         users = await dal.get_all_users(session, only_registered=True)
-
         for user in users:
             if not user.remnawave_uuid:
                 continue
@@ -27,8 +25,8 @@ async def check_expiring_subscriptions(bot: Bot, panel_by_uuid: dict):
             if not rw:
                 continue
             try:
-                days_left = (rw.expire_at - now).days
                 status = rw.status.value
+                days_left = (rw.expire_at - now).days
 
                 if status == "EXPIRED":
                     if not await dal.was_notified(session, user.id, "expired"):
@@ -60,58 +58,60 @@ async def check_expiring_subscriptions(bot: Bot, panel_by_uuid: dict):
 
 
 async def revoke_expired_mtproto(bot: Bot, panel_by_uuid: dict):
-    """Удаляет из telemt пользователей с просроченной > 5 дней подпиской."""
     from sqlalchemy import update as sa_update
     from db.models import User
     from db.database import async_session_maker
     from bot.services import telemt as telemt_svc
 
+    grace = timedelta(days=5)
+    now = datetime.now(timezone.utc)
+
     async with async_session_maker() as session:
         users = await dal.get_all_users(session, only_registered=True)
-        now = datetime.now(timezone.utc)
-        grace = timedelta(days=5)
+        to_revoke = [
+            u for u in users
+            if u.mtproto_secret and u.remnawave_uuid
+            and (rw := panel_by_uuid.get(u.remnawave_uuid))
+            and rw.status.value == "EXPIRED"
+            and (now - rw.expire_at) > grace
+        ]
 
-        for user in users:
-            if not getattr(user, "mtproto_secret", None) or not user.remnawave_uuid:
-                continue
-            rw = panel_by_uuid.get(user.remnawave_uuid)
-            if not rw:
-                continue
+        if not to_revoke:
+            return
+
+        for user in to_revoke:
             try:
-                if rw.status.value == "EXPIRED" and (now - rw.expire_at) > grace:
-                    telemt_svc.remove_user(user.remnawave_username)
-                    await session.execute(
-                        sa_update(User)
-                        .where(User.telegram_id == user.telegram_id)
-                        .values(mtproto_secret=None)
-                    )
-                    await session.commit()
-                    logger.info(f"MTProto revoked for expired user {user.remnawave_username}")
-                    try:
-                        await bot.send_message(
-                            user.telegram_id,
-                            "📡 <b>MTProto прокси деактивирован.</b>\n\n"
-                            "Подписка не оплачена более 5 дней. "
-                            "После продления прокси восстановится автоматически.",
-                            parse_mode="HTML",
-                            disable_notification=True,
-                        )
-                    except Exception:
-                        pass
+                telemt_svc.remove_user(user.remnawave_username)
             except Exception as e:
-                logger.warning(f"MTProto revoke check failed for {user.telegram_id}: {e}")
+                logger.warning(f"telemt remove failed for {user.remnawave_username}: {e}")
+
+        tg_ids = [u.telegram_id for u in to_revoke]
+        await session.execute(
+            sa_update(User).where(User.telegram_id.in_(tg_ids)).values(mtproto_secret=None)
+        )
+        await session.commit()
+
+        for user in to_revoke:
+            logger.info(f"MTProto revoked for {user.remnawave_username}")
+            try:
+                await bot.send_message(
+                    user.telegram_id,
+                    "📡 <b>MTProto прокси деактивирован.</b>\n\n"
+                    "Подписка не оплачена более 5 дней. После продления прокси восстановится автоматически.",
+                    parse_mode="HTML",
+                    disable_notification=True,
+                )
+            except Exception:
+                pass
 
 
 async def scheduler(bot: Bot):
-    """Fallback-проверка каждые 6 часов. Один bulk-запрос на весь цикл."""
     await asyncio.sleep(5)
     while True:
         try:
-            # Один запрос к панели — используем в обеих задачах
             panel_users = await remnawave.get_all_users_bulk()
             panel_by_uuid = {u.uuid: u for u in panel_users}
             logger.info(f"Scheduler: loaded {len(panel_by_uuid)} users from panel")
-
             await check_expiring_subscriptions(bot, panel_by_uuid)
             await revoke_expired_mtproto(bot, panel_by_uuid)
         except Exception as e:
