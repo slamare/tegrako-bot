@@ -10,10 +10,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest, TelegramAPIError
 
 
-# ── Утилиты удаления сообщений ────────────────────────────────────────────────
+# ── Удаление сообщений ────────────────────────────────────────────────────
 
-async def delete_later(bot, chat_id: int, message_id: int, delay: int = 30):
-    """Отложенное удаление сообщения."""
+async def delete_later(bot, chat_id: int, message_id: int, delay: int = 30) -> None:
     await asyncio.sleep(delay)
     try:
         await bot.delete_message(chat_id, message_id)
@@ -24,13 +23,10 @@ async def delete_later(bot, chat_id: int, message_id: int, delay: int = 30):
 async def cleanup_fsm_interaction(
     message: Message,
     state: FSMContext,
-    final_msg: Message = None,
+    final_msg: Optional[Message] = None,
     final_delay: int = 30,
-):
-    """
-    Удаляет сообщение пользователя и предыдущий промпт бота (если сохранён в state).
-    Если передан final_msg — планирует его удаление через final_delay секунд.
-    """
+) -> None:
+    """Удаляет сообщение пользователя и предыдущий промпт бота из state."""
     data = await state.get_data()
     if prompt_id := data.get("bot_prompt_msg_id"):
         try:
@@ -41,86 +37,70 @@ async def cleanup_fsm_interaction(
         await message.delete()
     except Exception:
         pass
-
     if final_msg:
-        asyncio.create_task(delete_later(message.bot, message.chat.id, final_msg.message_id, final_delay))
+        asyncio.create_task(
+            delete_later(message.bot, message.chat.id, final_msg.message_id, final_delay)
+        )
 
 
-# ── Универсальное редактирование сообщений ─────────────────────────────────────
+# ── Редактирование сообщений ──────────────────────────────────────────────
+
+_EDIT_NOT_FOUND_ERRORS = (
+    "message to edit not found",
+    "message can't be edited",
+    "there is no text",
+)
+
+
+async def _safe_edit(msg: Message, text: str, reply_markup, parse_mode: str) -> bool:
+    """Пробует отредактировать сообщение. Возвращает True при успехе."""
+    try:
+        if msg.photo:
+            await msg.edit_caption(caption=text, parse_mode=parse_mode, reply_markup=reply_markup)
+        else:
+            await msg.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        return True
+    except TelegramBadRequest as e:
+        err = str(e).lower()
+        return "message is not modified" in err
+    except (TelegramAPIError, Exception):
+        return False
+
 
 async def edit_or_answer(
     callback: CallbackQuery,
     text: str,
     reply_markup=None,
     parse_mode: str = "HTML",
-):
+) -> Optional[Message]:
     """
-    Универсальное редактирование: edit_caption для фото, edit_text для текста.
-    Если редактирование не удалось — удаляет старое сообщение и отправляет новое.
+    Редактирует текущее сообщение callback'а.
+    Если редактирование невозможно — удаляет старое и отправляет новое.
+    Возвращает новое Message только если отправлялось новое, иначе None.
     """
     msg = callback.message
-    edited = False
-    try:
-        if msg.photo:
-            await msg.edit_caption(
-                caption=text, parse_mode=parse_mode, reply_markup=reply_markup
-            )
-        else:
-            await msg.edit_text(
-                text, parse_mode=parse_mode, reply_markup=reply_markup
-            )
-        edited = True
-    except TelegramBadRequest as e:
-        error_msg = str(e).lower()
+    sent: Optional[Message] = None
 
-        if "message is not modified" in error_msg:
-            edited = True
-        elif any(x in error_msg for x in [
-            "message to edit not found",
-            "message can't be edited",
-            "message is not modified",
-            "there is no text",
-        ]):
-            try:
-                await msg.delete()
-            except Exception:
-                pass
-            await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
-            edited = True
-        else:
-            try:
-                await msg.delete()
-            except Exception:
-                pass
-            await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
-            edited = True
-    except TelegramAPIError:
+    edited = await _safe_edit(msg, text, reply_markup, parse_mode)
+    if not edited:
         try:
             await msg.delete()
         except Exception:
             pass
-        await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
-        edited = True
-    except Exception:
-        try:
-            await msg.delete()
-        except Exception:
-            pass
-        await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
-        edited = True
+        sent = await msg.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
 
     try:
         await callback.answer()
     except Exception:
         pass
 
-    return edited
+    return sent
 
 
-# ── Кэш последних сообщений меню ─────────────────────────────────────────────
+# ── Кэш сообщений меню ────────────────────────────────────────────────────
 
 class _MenuMessageCache:
-    """Хранит message_id главного меню для каждого пользователя."""
+    """Хранит message_id главного меню для каждого пользователя (TTL 10 мин)."""
 
     def __init__(self, ttl: int = 600):
         self._ttl = ttl
@@ -136,14 +116,84 @@ class _MenuMessageCache:
             return None
         return msg_id
 
-    def set(self, tg_id: int, message_id: int):
+    def set(self, tg_id: int, message_id: int) -> None:
         self._data[tg_id] = (message_id, time.time())
 
-    def delete(self, tg_id: int):
+    def delete(self, tg_id: int) -> None:
         self._data.pop(tg_id, None)
 
 
 menu_cache = _MenuMessageCache(ttl=600)
+
+
+async def _try_edit_cached_menu(
+    bot,
+    chat_id: int,
+    message_id: int,
+    tg_id: int,
+    text: str,
+    reply_markup,
+    parse_mode: str,
+) -> bool:
+    """Пробует отредактировать кэшированное меню. При неудаче — удаляет и чистит кэш."""
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+        menu_cache.set(tg_id, message_id)
+        return True
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e).lower():
+            menu_cache.set(tg_id, message_id)
+            return True
+        # Сообщение удалено или недоступно — чистим кэш
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except Exception:
+            pass
+        menu_cache.delete(tg_id)
+        return False
+    except (TelegramAPIError, Exception):
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except Exception:
+            pass
+        menu_cache.delete(tg_id)
+        return False
+
+
+async def _send_menu_message(
+    target,
+    chat_id: int,
+    tg_id: int,
+    text: str,
+    reply_markup,
+    parse_mode: str,
+    photo_url: Optional[str],
+) -> Message:
+    """Отправляет новое сообщение меню и кэширует его."""
+    if photo_url:
+        try:
+            from aiogram.types import FSInputFile
+            photo = photo_url if photo_url.startswith("http") else FSInputFile(photo_url)
+            # answer работает как для Message, так и для callback.message
+            answer = getattr(target, "answer", None) or target.message.answer
+            sent = await answer(photo, caption=text, parse_mode=parse_mode, reply_markup=reply_markup)
+            # answer_photo у Message принимает photo как первый аргумент
+        except Exception:
+            pass
+
+    answer_fn = getattr(target, "answer", None)
+    if answer_fn is None:
+        answer_fn = target.message.answer
+
+    sent = await answer_fn(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    menu_cache.set(tg_id, sent.message_id)
+    return sent
 
 
 async def show_menu_message(
@@ -151,82 +201,33 @@ async def show_menu_message(
     text: str,
     reply_markup=None,
     parse_mode: str = "HTML",
-    photo_url: str | None = None,
+    photo_url: Optional[str] = None,
 ) -> Message:
     """
-    Показывает главное меню, ВСЕГДА удаляя текущее сообщение callback'а.
-    Затем либо редактирует кэшированное меню, либо отправляет новое.
+    Показывает главное меню. Всегда удаляет текущее сообщение callback'а,
+    затем редактирует кэшированное меню или отправляет новое.
     """
     tg_id = target.from_user.id
 
     if isinstance(target, CallbackQuery):
         msg = target.message
-
-        # ВСЕГДА удаляем текущее сообщение callback'а
         try:
             await msg.delete()
         except Exception:
             pass
 
-        # Пытаемся отредактировать кэшированное меню (только если нет photo_url)
-        prev_menu_id = menu_cache.get(tg_id)
-        if prev_menu_id and not photo_url:
-            try:
-                await target.bot.edit_message_text(
-                    chat_id=msg.chat.id,
-                    message_id=prev_menu_id,
-                    text=text,
-                    parse_mode=parse_mode,
-                    reply_markup=reply_markup,
-                )
-                menu_cache.set(tg_id, prev_menu_id)
-
+        prev_id = menu_cache.get(tg_id)
+        if prev_id and not photo_url:
+            ok = await _try_edit_cached_menu(
+                target.bot, msg.chat.id, prev_id, tg_id, text, reply_markup, parse_mode
+            )
+            if ok:
                 try:
                     await target.answer()
                 except Exception:
                     pass
-
                 return msg
-            except TelegramBadRequest as e:
-                error_msg = str(e).lower()
 
-                if "message is not modified" in error_msg:
-                    menu_cache.set(tg_id, prev_menu_id)
-                    try:
-                        await target.answer()
-                    except Exception:
-                        pass
-                    return msg
-
-                if any(x in error_msg for x in [
-                    "message to edit not found",
-                    "message can't be edited",
-                ]):
-                    try:
-                        await target.bot.delete_message(
-                            chat_id=msg.chat.id, message_id=prev_menu_id
-                        )
-                    except Exception:
-                        pass
-                    menu_cache.delete(tg_id)
-            except TelegramAPIError:
-                try:
-                    await target.bot.delete_message(
-                        chat_id=msg.chat.id, message_id=prev_menu_id
-                    )
-                except Exception:
-                    pass
-                menu_cache.delete(tg_id)
-            except Exception:
-                try:
-                    await target.bot.delete_message(
-                        chat_id=msg.chat.id, message_id=prev_menu_id
-                    )
-                except Exception:
-                    pass
-                menu_cache.delete(tg_id)
-
-        # Отправляем новое сообщение
         try:
             await target.answer()
         except Exception:
@@ -235,10 +236,7 @@ async def show_menu_message(
         if photo_url:
             try:
                 from aiogram.types import FSInputFile
-                photo = (
-                    photo_url if photo_url.startswith("http")
-                    else FSInputFile(photo_url)
-                )
+                photo = photo_url if photo_url.startswith("http") else FSInputFile(photo_url)
                 sent = await msg.answer_photo(
                     photo, caption=text, parse_mode=parse_mode, reply_markup=reply_markup
                 )
@@ -251,70 +249,19 @@ async def show_menu_message(
         menu_cache.set(tg_id, sent.message_id)
         return sent
 
-    # Для Message (не callback)
+    # Message path
     prev_id = menu_cache.get(tg_id)
     if prev_id and not photo_url:
-        try:
-            await target.bot.edit_message_text(
-                chat_id=target.chat.id,
-                message_id=prev_id,
-                text=text,
-                parse_mode=parse_mode,
-                reply_markup=reply_markup,
-            )
-            menu_cache.set(tg_id, prev_id)
+        ok = await _try_edit_cached_menu(
+            target.bot, target.chat.id, prev_id, tg_id, text, reply_markup, parse_mode
+        )
+        if ok:
             return target
-        except TelegramBadRequest as e:
-            error_msg = str(e).lower()
 
-            if "message is not modified" in error_msg:
-                menu_cache.set(tg_id, prev_id)
-                return target
-
-            if any(x in error_msg for x in [
-                "message to edit not found",
-                "message can't be edited",
-            ]):
-                try:
-                    await target.bot.delete_message(
-                        chat_id=target.chat.id, message_id=prev_id
-                    )
-                except Exception:
-                    pass
-                menu_cache.delete(tg_id)
-            else:
-                try:
-                    await target.bot.delete_message(
-                        chat_id=target.chat.id, message_id=prev_id
-                    )
-                except Exception:
-                    pass
-                menu_cache.delete(tg_id)
-        except TelegramAPIError:
-            try:
-                await target.bot.delete_message(
-                    chat_id=target.chat.id, message_id=prev_id
-                )
-            except Exception:
-                pass
-            menu_cache.delete(tg_id)
-        except Exception:
-            try:
-                await target.bot.delete_message(
-                    chat_id=target.chat.id, message_id=prev_id
-                )
-            except Exception:
-                pass
-            menu_cache.delete(tg_id)
-
-    # Отправляем новое сообщение
     if photo_url:
         try:
             from aiogram.types import FSInputFile
-            photo = (
-                photo_url if photo_url.startswith("http")
-                else FSInputFile(photo_url)
-            )
+            photo = photo_url if photo_url.startswith("http") else FSInputFile(photo_url)
             sent = await target.answer_photo(
                 photo, caption=text, parse_mode=parse_mode, reply_markup=reply_markup
             )
