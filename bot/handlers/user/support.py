@@ -3,17 +3,17 @@ import asyncio
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bot.keyboards.admin_kb import ticket_reply_kb
 from bot.states.states import SupportSG
-from bot.utils.helpers import delete_later, cleanup_fsm_interaction
+from bot.utils.helpers import delete_later
 from config.settings import settings
 from db import dal
 
 router = Router()
 
-# Типы, запрещённые в поддержке: стикеры, гифки (animation), кружки, голосовые
 _BANNED_IN_SUPPORT = F.sticker | F.animation | F.video_note | F.voice
 
 
@@ -48,20 +48,17 @@ async def close_ticket_cmd(message: Message, session: AsyncSession, state: FSMCo
 
 
 @router.message(SupportSG.waiting_message, _BANNED_IN_SUPPORT)
-async def reject_banned_type_in_support(message: Message, state: FSMContext):
-    """Стикеры, гифки, кружки и голосовые запрещены в поддержке."""
+async def reject_banned_type_in_support(message: Message):
     try:
         await message.delete()
     except Exception:
         pass
-
     if message.voice or message.video_note:
-        text = "🎙 Голосовые и кружки не принимаются в поддержке.\n\nПишите текстом, прикладывайте фото или видео."
+        text = "🎙 Голосовые и кружки не принимаются.\n\nПишите текстом, прикладывайте фото или видео."
     elif message.sticker:
         text = "🙅 Стикеры не принимаются. Напишите текстом или прикрепите скриншот."
     else:
         text = "🎞 Гифки не принимаются. Напишите текстом или прикрепите скриншот."
-
     msg = await message.answer(text, disable_notification=True)
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
@@ -74,7 +71,6 @@ async def user_support_message(message: Message, session: AsyncSession, state: F
         await state.clear()
         return
 
-    # Принимаем: текст, фото, видео, документы — всё остальное уже отфильтровано выше
     media_file_id = None
     media_type = None
     text = message.text or message.caption
@@ -88,14 +84,13 @@ async def user_support_message(message: Message, session: AsyncSession, state: F
     elif message.document:
         media_file_id = message.document.file_id
         media_type = "document"
-    else:
-        # Неизвестный тип — отклоняем
+    elif not text:
         try:
             await message.delete()
         except Exception:
             pass
         msg = await message.answer(
-            "📎 Этот тип сообщений не поддерживается в поддержке.\n\nОтправьте текст, фото или видео.",
+            "📎 Этот тип не поддерживается. Отправьте текст, фото или видео.",
             disable_notification=True,
         )
         asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
@@ -113,8 +108,6 @@ async def user_support_message(message: Message, session: AsyncSession, state: F
     )
 
     user = await dal.get_user(session, message.from_user.id)
-    from bot.keyboards.admin_kb import ticket_reply_kb
-
     notify_text = (
         f"💬 <b>Тикет #{ticket_id}</b>\n"
         f"От: @{user.username or '—'} (<code>{user.telegram_id}</code>)\n"
@@ -122,12 +115,7 @@ async def user_support_message(message: Message, session: AsyncSession, state: F
     )
     for admin_id in settings.admin_ids:
         try:
-            await message.bot.send_message(
-                admin_id,
-                notify_text,
-                parse_mode="HTML",
-                # уведомления в поддержке для админов — со звуком, это рабочие алерты
-            )
+            await message.bot.send_message(admin_id, notify_text, parse_mode="HTML")
             await message.forward(admin_id)
             await message.bot.send_message(
                 admin_id,
