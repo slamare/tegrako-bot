@@ -24,11 +24,12 @@ async def main():
     bot = Bot(token=settings.BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
 
+    for mw in (DatabaseMiddleware(), BanCheckMiddleware()):
+        dp.message.middleware(mw)
+        dp.callback_query.middleware(mw)
     dp.message.middleware(DatabaseMiddleware())
-    dp.callback_query.middleware(DatabaseMiddleware())
     dp.inline_query.middleware(DatabaseMiddleware())
-    dp.message.middleware(BanCheckMiddleware())
-    dp.callback_query.middleware(BanCheckMiddleware())
+    dp.inline_query.middleware(BanCheckMiddleware())
 
     dp.include_router(start.router)
     dp.include_router(payment.router)
@@ -36,17 +37,13 @@ async def main():
     dp.include_router(mtproto.router)
     dp.include_router(admin.router)
 
-    # Запускаем webhook-сервер для событий от Remnawave
     webhook_app = create_webhook_app(bot)
     runner = web.AppRunner(webhook_app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", settings.WEBHOOK_PORT)
-    await site.start()
-    logger.info(f"Remnawave webhook server started on port {settings.WEBHOOK_PORT}")
+    await web.TCPSite(runner, "0.0.0.0", settings.WEBHOOK_PORT).start()
+    logger.info(f"Webhook server on port {settings.WEBHOOK_PORT}")
 
-    # Scheduler — fallback если панель не доставила событие
     asyncio.create_task(scheduler(bot))
-
     logger.info("Bot started")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
