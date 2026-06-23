@@ -1,5 +1,5 @@
 """
-Клиент Remnawave через httpx напрямую.
+Клиент Remnawave через httpx.
 """
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -12,6 +12,18 @@ from cachetools import TTLCache
 from config.settings import settings
 
 
+# ── Shared client ──────────────────────────────────────────────────────────
+
+_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(verify=True, timeout=10)
+    return _client
+
+
 def _headers() -> dict:
     return {"Authorization": f"Bearer {settings.PANEL_API_KEY}"}
 
@@ -20,7 +32,7 @@ def _url(path: str) -> str:
     return f"{settings.PANEL_API_URL}/api{path}"
 
 
-# ── Dataclasses ───────────────────────────────────────────────────────────
+# ── Dataclasses ────────────────────────────────────────────────────────────
 
 @dataclass
 class UserTraffic:
@@ -105,56 +117,68 @@ def _parse_user(u: dict) -> UserInfo:
     )
 
 
-# ── Кэш для get_subscription_info ─────────────────────────────────────────
+# ── Кэш get_subscription_info ──────────────────────────────────────────────
 
 _sub_info_cache: TTLCache = TTLCache(maxsize=500, ttl=45)
+# Словарь блокировок очищается вместе с кэшем через weakref-подобную логику:
+# ключи удаляются из _sub_info_locks только при invalidate, чтобы не рос без предела.
 _sub_info_locks: dict[str, asyncio.Lock] = {}
 
 
-def invalidate_sub_info_cache(uuid: str | None = None):
-    """Сбросить кэш подписки. Если uuid=None — сбросить весь кэш."""
+def invalidate_sub_info_cache(uuid: Optional[str] = None) -> None:
     if uuid is None:
         _sub_info_cache.clear()
+        _sub_info_locks.clear()
     else:
         _sub_info_cache.pop(uuid, None)
+        _sub_info_locks.pop(uuid, None)
 
 
 # ── Users ──────────────────────────────────────────────────────────────────
 
 async def username_exists(username: str) -> bool:
     try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.get(
-                _url(f"/users/by-username/{username}"), headers=_headers(), timeout=10
-            )
-            return resp.status_code == 200
+        resp = await _get_client().get(
+            _url(f"/users/by-username/{username}"), headers=_headers()
+        )
+        return resp.status_code == 200
     except Exception:
         return False
 
 
 async def get_user_by_uuid(uuid: str) -> Optional[UserInfo]:
     try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.get(_url(f"/users/{uuid}"), headers=_headers(), timeout=10)
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
-            u = data.get("response", data)
-            return _parse_user(u)
+        resp = await _get_client().get(_url(f"/users/{uuid}"), headers=_headers())
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        return _parse_user(data.get("response", data))
     except Exception:
         return None
 
 
 async def get_user_by_telegram_id(telegram_id: int) -> Optional[UserInfo]:
     try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.get(_url("/users?limit=1000"), headers=_headers(), timeout=15)
-            data = resp.json()
-            users = data.get("response", {}).get("users", [])
-            u = next((x for x in users if x.get("telegramId") == telegram_id), None)
-            return _parse_user(u) if u else None
+        resp = await _get_client().get(
+            _url("/users?limit=1000"), headers=_headers(), timeout=15
+        )
+        users = resp.json().get("response", {}).get("users", [])
+        u = next((x for x in users if x.get("telegramId") == telegram_id), None)
+        return _parse_user(u) if u else None
     except Exception:
         return None
+
+
+async def get_all_users_bulk() -> list[UserInfo]:
+    """Один запрос — все пользователи. Используется в scheduler."""
+    try:
+        resp = await _get_client().get(
+            _url("/users?limit=10000"), headers=_headers(), timeout=30
+        )
+        users = resp.json().get("response", {}).get("users", [])
+        return [_parse_user(u) for u in users]
+    except Exception:
+        return []
 
 
 async def create_user(
@@ -173,53 +197,45 @@ async def create_user(
         "telegramId": telegram_id,
         "status": "ACTIVE",
     }
-    async with httpx.AsyncClient(verify=True) as client:
-        resp = await client.post(_url("/users"), headers=_headers(), json=payload, timeout=10)
+    resp = await _get_client().post(_url("/users"), headers=_headers(), json=payload)
+    resp.raise_for_status()
+    return _parse_user(resp.json().get("response", resp.json()))
+
+
+async def _patch_user(payload: dict) -> Optional[UserInfo]:
+    """Общий PATCH /api/users — используется всеми функциями изменения пользователя."""
+    try:
+        resp = await _get_client().patch(_url("/users"), headers=_headers(), json=payload)
         resp.raise_for_status()
-        data = resp.json()
-        u = data.get("response", data)
-        return _parse_user(u)
+        result = _parse_user(resp.json().get("response", resp.json()))
+        invalidate_sub_info_cache(payload.get("uuid"))
+        return result
+    except Exception:
+        return None
 
 
 async def extend_subscription(uuid: str, duration_days: int) -> UserInfo:
     user = await get_user_by_uuid(uuid)
     if not user:
-        raise Exception(f"User {uuid} not found")
+        raise ValueError(f"User {uuid} not found")
     now = datetime.now(timezone.utc)
     base = user.expire_at if user.expire_at > now else now
-    new_expire = base + timedelta(days=duration_days)
-    payload = {
+    result = await _patch_user({
         "uuid": uuid,
-        "expireAt": new_expire.isoformat(),
+        "expireAt": (base + timedelta(days=duration_days)).isoformat(),
         "status": "ACTIVE",
-    }
-    async with httpx.AsyncClient(verify=True) as client:
-        resp = await client.patch(_url("/users"), headers=_headers(), json=payload, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        u = data.get("response", data)
-        result = _parse_user(u)
-    invalidate_sub_info_cache(uuid)
+    })
+    if result is None:
+        raise RuntimeError(f"Failed to extend subscription for {uuid}")
     return result
 
 
 async def set_expire_at(uuid: str, expire_at: datetime) -> Optional[UserInfo]:
-    payload = {
+    return await _patch_user({
         "uuid": uuid,
         "expireAt": expire_at.isoformat(),
         "status": "ACTIVE",
-    }
-    try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.patch(_url("/users"), headers=_headers(), json=payload, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            u = data.get("response", data)
-            result = _parse_user(u)
-        invalidate_sub_info_cache(uuid)
-        return result
-    except Exception:
-        return None
+    })
 
 
 async def update_user_limits(
@@ -232,39 +248,17 @@ async def update_user_limits(
         payload["trafficLimitBytes"] = traffic_limit_gb * 1024 ** 3
     if device_limit is not None:
         payload["hwidDeviceLimit"] = device_limit
-    try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.patch(_url("/users"), headers=_headers(), json=payload, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            u = data.get("response", data)
-            result = _parse_user(u)
-        invalidate_sub_info_cache(uuid)
-        return result
-    except Exception:
-        return None
+    return await _patch_user(payload)
 
 
 async def set_user_status(uuid: str, status: str) -> Optional[UserInfo]:
-    payload = {"uuid": uuid, "status": status}
-    try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.patch(_url("/users"), headers=_headers(), json=payload, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            u = data.get("response", data)
-            result = _parse_user(u)
-        invalidate_sub_info_cache(uuid)
-        return result
-    except Exception:
-        return None
+    return await _patch_user({"uuid": uuid, "status": status})
 
 
 async def delete_panel_user(uuid: str) -> bool:
     try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.delete(_url(f"/users/{uuid}"), headers=_headers(), timeout=10)
-            ok = resp.status_code in (200, 204)
+        resp = await _get_client().delete(_url(f"/users/{uuid}"), headers=_headers())
+        ok = resp.status_code in (200, 204)
         if ok:
             invalidate_sub_info_cache(uuid)
         return ok
@@ -274,13 +268,10 @@ async def delete_panel_user(uuid: str) -> bool:
 
 async def reset_user_traffic(uuid: str) -> bool:
     try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.post(
-                _url(f"/users/{uuid}/actions/reset-traffic"),
-                headers=_headers(),
-                timeout=10,
-            )
-            ok = resp.status_code in (200, 201)
+        resp = await _get_client().post(
+            _url(f"/users/{uuid}/actions/reset-traffic"), headers=_headers()
+        )
+        ok = resp.status_code in (200, 201)
         if ok:
             invalidate_sub_info_cache(uuid)
         return ok
@@ -289,19 +280,16 @@ async def reset_user_traffic(uuid: str) -> bool:
 
 
 async def get_subscription_info(uuid: str) -> Optional[UserInfo]:
-    """Получить информацию о подписке с кэшированием (TTL 45 сек)."""
+    """Получить подписку с кэшем (TTL 45 сек). Double-checked locking."""
     cached = _sub_info_cache.get(uuid)
     if cached is not None:
         return cached
 
-    if uuid not in _sub_info_locks:
-        _sub_info_locks[uuid] = asyncio.Lock()
-
-    async with _sub_info_locks[uuid]:
+    lock = _sub_info_locks.setdefault(uuid, asyncio.Lock())
+    async with lock:
         cached = _sub_info_cache.get(uuid)
         if cached is not None:
             return cached
-
         result = await get_user_by_uuid(uuid)
         if result is not None:
             _sub_info_cache[uuid] = result
@@ -310,17 +298,12 @@ async def get_subscription_info(uuid: str) -> Optional[UserInfo]:
 
 async def revoke_subscription(uuid: str) -> Optional[UserInfo]:
     try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.post(
-                _url(f"/users/{uuid}/actions/revoke"),
-                headers=_headers(),
-                timeout=10,
-            )
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
-            u = data.get("response", data)
-            result = _parse_user(u)
+        resp = await _get_client().post(
+            _url(f"/users/{uuid}/actions/revoke"), headers=_headers()
+        )
+        if resp.status_code != 200:
+            return None
+        result = _parse_user(resp.json().get("response", resp.json()))
         invalidate_sub_info_cache(uuid)
         return result
     except Exception:
@@ -331,33 +314,28 @@ async def revoke_subscription(uuid: str) -> Optional[UserInfo]:
 
 async def get_internal_squads() -> list[SquadInfo]:
     try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.get(_url("/internal-squads"), headers=_headers(), timeout=10)
-            data = resp.json()
-            squads = data.get("response", {}).get("internalSquads", [])
-            return [
-                SquadInfo(
-                    uuid=s["uuid"],
-                    name=s["name"],
-                    members_count=s.get("info", {}).get("membersCount", 0),
-                )
-                for s in squads
-            ]
+        resp = await _get_client().get(_url("/internal-squads"), headers=_headers())
+        squads = resp.json().get("response", {}).get("internalSquads", [])
+        return [
+            SquadInfo(
+                uuid=s["uuid"],
+                name=s["name"],
+                members_count=s.get("info", {}).get("membersCount", 0),
+            )
+            for s in squads
+        ]
     except Exception:
         return []
 
 
 async def add_user_to_squad(user_uuid: str, squad_uuid: str) -> bool:
     try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.post(
-                _url(f"/internal-squads/{squad_uuid}/bulk-actions/add-users"),
-                headers=_headers(),
-                json={"userUuids": [user_uuid]},
-                timeout=10,
-            )
-            data = resp.json()
-            return data.get("response", {}).get("eventSent", False)
+        resp = await _get_client().post(
+            _url(f"/internal-squads/{squad_uuid}/bulk-actions/add-users"),
+            headers=_headers(),
+            json={"userUuids": [user_uuid]},
+        )
+        return resp.json().get("response", {}).get("eventSent", False)
     except Exception:
         return False
 
@@ -375,84 +353,74 @@ async def add_user_to_default_squad(
 
 async def get_user_devices(user_uuid: str) -> list[HwidDevice]:
     try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.get(
-                _url(f"/hwid/devices/{user_uuid}"), headers=_headers(), timeout=10
+        resp = await _get_client().get(
+            _url(f"/hwid/devices/{user_uuid}"), headers=_headers()
+        )
+        devices = resp.json().get("response", {}).get("devices", [])
+        return [
+            HwidDevice(
+                hwid=d["hwid"],
+                user_uuid=d["userUuid"],
+                platform=d.get("platform"),
+                os_version=d.get("osVersion"),
+                device_model=d.get("deviceModel"),
+                user_agent=d.get("userAgent"),
+                created_at=d.get("createdAt", ""),
             )
-            data = resp.json()
-            devices = data.get("response", {}).get("devices", [])
-            return [
-                HwidDevice(
-                    hwid=d["hwid"],
-                    user_uuid=d["userUuid"],
-                    platform=d.get("platform"),
-                    os_version=d.get("osVersion"),
-                    device_model=d.get("deviceModel"),
-                    user_agent=d.get("userAgent"),
-                    created_at=d.get("createdAt", ""),
-                )
-                for d in devices
-            ]
+            for d in devices
+        ]
     except Exception:
         return []
 
 
 async def delete_user_device(user_uuid: str, hwid: str) -> bool:
     try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.post(
-                _url("/hwid/devices/delete"),
-                headers=_headers(),
-                json={"userUuid": user_uuid, "hwid": hwid},
-                timeout=10,
-            )
-            return resp.status_code == 200
+        resp = await _get_client().post(
+            _url("/hwid/devices/delete"),
+            headers=_headers(),
+            json={"userUuid": user_uuid, "hwid": hwid},
+        )
+        return resp.status_code == 200
     except Exception:
         return False
 
 
 async def delete_all_user_devices(user_uuid: str) -> bool:
     try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.post(
-                _url("/hwid/devices/delete-all"),
-                headers=_headers(),
-                json={"userUuid": user_uuid},
-                timeout=10,
-            )
-            return resp.status_code == 200
+        resp = await _get_client().post(
+            _url("/hwid/devices/delete-all"),
+            headers=_headers(),
+            json={"userUuid": user_uuid},
+        )
+        return resp.status_code == 200
     except Exception:
         return False
 
 
-# ─ Nodes ──────────────────────────────────────────────────────────────────
+# ── Nodes ──────────────────────────────────────────────────────────────────
 
 async def get_nodes() -> list[NodeInfo]:
     try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.get(_url("/nodes"), headers=_headers(), timeout=10)
-            data = resp.json()
-            nodes_raw = data.get("response", [])
-            return [
-                NodeInfo(
-                    uuid=n["uuid"],
-                    name=n["name"],
-                    address=n["address"],
-                    is_connected=n.get("isConnected", False),
-                )
-                for n in nodes_raw
-            ]
+        resp = await _get_client().get(_url("/nodes"), headers=_headers())
+        return [
+            NodeInfo(
+                uuid=n["uuid"],
+                name=n["name"],
+                address=n["address"],
+                is_connected=n.get("isConnected", False),
+            )
+            for n in resp.json().get("response", [])
+        ]
     except Exception:
         return []
 
 
 async def restart_node(node_uuid: str) -> bool:
     try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.post(
-                _url(f"/nodes/{node_uuid}/restart"), headers=_headers(), timeout=10
-            )
-            return resp.status_code in (200, 201)
+        resp = await _get_client().post(
+            _url(f"/nodes/{node_uuid}/restart"), headers=_headers()
+        )
+        return resp.status_code in (200, 201)
     except Exception:
         return False
 
@@ -461,65 +429,44 @@ async def restart_node(node_uuid: str) -> bool:
 
 async def get_inbounds() -> list[InboundInfo]:
     try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.get(_url("/config-profiles/inbounds"), headers=_headers(), timeout=10)
-            if resp.status_code != 200:
-                return []
-            data = resp.json()
-            raw = data.get("response", {})
-            if isinstance(raw, dict):
-                items = raw.get("inbounds", [])
-            elif isinstance(raw, list):
-                items = raw
-            else:
-                return []
-            return [
-                InboundInfo(
-                    uuid=i["uuid"],
-                    tag=i.get("tag", ""),
-                    type=i.get("type", ""),
-                    is_enabled=i.get("isEnabled", True),
-                )
-                for i in items
-            ]
+        resp = await _get_client().get(
+            _url("/config-profiles/inbounds"), headers=_headers()
+        )
+        if resp.status_code != 200:
+            return []
+        raw = resp.json().get("response", {})
+        items = raw.get("inbounds", []) if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
+        return [
+            InboundInfo(
+                uuid=i["uuid"],
+                tag=i.get("tag", ""),
+                type=i.get("type", ""),
+                is_enabled=i.get("isEnabled", True),
+            )
+            for i in items
+        ]
     except Exception:
         return []
 
 
 async def get_hosts() -> list[HostInfo]:
     try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.get(_url("/hosts"), headers=_headers(), timeout=10)
-            if resp.status_code != 200:
-                return []
-            data = resp.json()
-            raw = data.get("response", [])
-            if not isinstance(raw, list):
-                return []
-            return [
-                HostInfo(
-                    uuid=h["uuid"],
-                    remark=h.get("remark", ""),
-                    address=h.get("address", ""),
-                    port=h.get("port", 0),
-                    inbound_uuid=h.get("inboundUuid", ""),
-                    is_enabled=h.get("isEnabled", True),
-                )
-                for h in raw
-            ]
+        resp = await _get_client().get(_url("/hosts"), headers=_headers())
+        if resp.status_code != 200:
+            return []
+        raw = resp.json().get("response", [])
+        if not isinstance(raw, list):
+            return []
+        return [
+            HostInfo(
+                uuid=h["uuid"],
+                remark=h.get("remark", ""),
+                address=h.get("address", ""),
+                port=h.get("port", 0),
+                inbound_uuid=h.get("inboundUuid", ""),
+                is_enabled=h.get("isEnabled", True),
+            )
+            for h in raw
+        ]
     except Exception:
         return []
-
-
-async def get_all_users_bulk() -> list[UserInfo]:
-    """Один запрос — все пользователи. Используется в scheduler вместо N запросов."""
-    try:
-        async with httpx.AsyncClient(verify=True) as client:
-            resp = await client.get(_url("/users?limit=10000"), headers=_headers(), timeout=30)
-            data = resp.json()
-            users = data.get("response", {}).get("users", [])
-            return [_parse_user(u) for u in users]
-    except Exception:
-        return []
-
-
