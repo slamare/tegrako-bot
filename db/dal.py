@@ -1,6 +1,6 @@
 from typing import Optional
 from datetime import datetime, timedelta
-from sqlalchemy import select, update, func, delete
+from sqlalchemy import select, update, func, delete, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from db.models import (
@@ -27,26 +27,20 @@ async def get_user_by_uuid(session: AsyncSession, uuid: str) -> Optional[User]:
 
 
 async def search_users(session: AsyncSession, query: str) -> list[User]:
-    """Поиск по username, remnawave_username или telegram_id."""
     q = query.strip().lstrip("@")
-    filters = [
-        User.username.ilike(f"%{q}%"),
-        User.remnawave_username.ilike(f"%{q}%"),
-    ]
+    filters = [User.username.ilike(f"%{q}%"), User.remnawave_username.ilike(f"%{q}%")]
     try:
-        tg_id = int(q)
-        filters.append(User.telegram_id == tg_id)
+        filters.append(User.telegram_id == int(q))
     except ValueError:
         pass
-    from sqlalchemy import or_
-    result = await session.execute(
-        select(User).where(or_(*filters)).limit(20)
-    )
+    result = await session.execute(select(User).where(or_(*filters)).limit(20))
     return result.scalars().all()
 
 
-async def create_user(session: AsyncSession, telegram_id: int, username: Optional[str] = None,
-                      referred_by: Optional[int] = None) -> User:
+async def create_user(
+    session: AsyncSession, telegram_id: int,
+    username: Optional[str] = None, referred_by: Optional[int] = None,
+) -> User:
     user = User(telegram_id=telegram_id, username=username, referred_by=referred_by)
     session.add(user)
     await session.commit()
@@ -67,18 +61,8 @@ async def get_all_users(session: AsyncSession, only_registered: bool = False) ->
     return result.scalars().all()
 
 
-async def get_recent_users(session: AsyncSession, limit: int = 20) -> list[User]:
-    result = await session.execute(
-        select(User).where(User.is_registered == True)
-        .order_by(User.created_at.desc()).limit(limit)
-    )
-    return result.scalars().all()
-
-
 async def get_banned_users(session: AsyncSession) -> list[User]:
-    result = await session.execute(
-        select(User).where(User.is_banned == True)
-    )
+    result = await session.execute(select(User).where(User.is_banned == True))
     return result.scalars().all()
 
 
@@ -90,10 +74,9 @@ async def count_users(session: AsyncSession) -> dict:
 
 
 async def count_referrals(session: AsyncSession, telegram_id: int) -> int:
-    result = await session.scalar(
+    return await session.scalar(
         select(func.count(User.id)).where(User.referred_by == telegram_id)
-    )
-    return result or 0
+    ) or 0
 
 
 async def get_referrals_with_payment(session: AsyncSession, telegram_id: int) -> list[User]:
@@ -120,14 +103,18 @@ async def get_tariff(session: AsyncSession, tariff_id: int) -> Optional[Tariff]:
     return await session.get(Tariff, tariff_id)
 
 
+async def get_all_tariffs(session: AsyncSession) -> list[Tariff]:
+    result = await session.execute(select(Tariff).order_by(Tariff.sort_order, Tariff.price))
+    return result.scalars().all()
+
+
 async def create_tariff(session: AsyncSession, **kwargs) -> Tariff:
     allowed = {
         "name", "description", "duration_days", "traffic_limit_gb",
         "device_limit", "price", "is_active", "is_trial", "is_referral",
         "sort_order", "squad_uuid",
     }
-    filtered = {k: v for k, v in kwargs.items() if k in allowed}
-    tariff = Tariff(**filtered)
+    tariff = Tariff(**{k: v for k, v in kwargs.items() if k in allowed})
     session.add(tariff)
     await session.commit()
     await session.refresh(tariff)
@@ -144,11 +131,6 @@ async def delete_tariff(session: AsyncSession, tariff_id: int) -> None:
     if tariff:
         await session.delete(tariff)
         await session.commit()
-
-
-async def get_all_tariffs(session: AsyncSession) -> list[Tariff]:
-    result = await session.execute(select(Tariff).order_by(Tariff.sort_order, Tariff.price))
-    return result.scalars().all()
 
 
 # ── Payments ───────────────────────────────────────────────────────────────
@@ -192,16 +174,6 @@ async def update_payment(session: AsyncSession, payment_id: int, **kwargs) -> No
     await session.commit()
 
 
-async def get_user_payments(session: AsyncSession, user_id: int) -> list[Payment]:
-    result = await session.execute(
-        select(Payment)
-        .options(selectinload(Payment.tariff))
-        .where(Payment.user_id == user_id)
-        .order_by(Payment.created_at.desc())
-    )
-    return result.scalars().all()
-
-
 async def get_pending_payments(session: AsyncSession) -> list[Payment]:
     result = await session.execute(
         select(Payment)
@@ -217,70 +189,54 @@ async def get_revenue_stats(session: AsyncSession) -> dict:
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     week_start = now - timedelta(days=now.weekday())
 
-    # Учитываем сброс выручки
-    reset_at_str = await get_setting(session, "revenue_reset_at", "")
     reset_filter = []
+    reset_at_str = await get_setting(session, "revenue_reset_at", "")
     if reset_at_str:
         try:
-            reset_at = datetime.fromisoformat(reset_at_str)
-            reset_filter = [Payment.created_at >= reset_at]
+            reset_filter = [Payment.created_at >= datetime.fromisoformat(reset_at_str)]
         except ValueError:
             pass
 
-    total = await session.scalar(
-        select(func.sum(Payment.amount)).where(Payment.status == "approved", *reset_filter)
-    ) or 0
+    base = [Payment.status == "approved"]
+    total = await session.scalar(select(func.sum(Payment.amount)).where(*base, *reset_filter)) or 0
     monthly = await session.scalar(
-        select(func.sum(Payment.amount)).where(
-            Payment.status == "approved", Payment.created_at >= month_start
-        )
+        select(func.sum(Payment.amount)).where(*base, Payment.created_at >= month_start)
     ) or 0
     weekly = await session.scalar(
-        select(func.sum(Payment.amount)).where(
-            Payment.status == "approved", Payment.created_at >= week_start
-        )
+        select(func.sum(Payment.amount)).where(*base, Payment.created_at >= week_start)
     ) or 0
-
     return {"total": float(total), "monthly": float(monthly), "weekly": float(weekly)}
 
 
 async def has_used_trial(session: AsyncSession, user_id: int) -> bool:
-    result = await session.execute(
-        select(Payment)
+    # Если есть одобренный платёж по триал-тарифу — уже использовал
+    trial_used = await session.scalar(
+        select(func.count(Payment.id))
         .join(Tariff, Payment.tariff_id == Tariff.id)
-        .where(
-            Payment.user_id == user_id,
-            Payment.status == "approved",
-            Tariff.is_trial == True,
-        )
+        .where(Payment.user_id == user_id, Payment.status == "approved", Tariff.is_trial == True)
     )
-    if result.scalar_one_or_none():
+    if trial_used:
         return True
+    # Если уже есть uuid в панели — новичком не считается
     result = await session.execute(
-        select(User).where(User.id == user_id, User.remnawave_uuid.is_not(None))
+        select(User.remnawave_uuid).where(User.id == user_id)
     )
-    return result.scalar_one_or_none() is not None
+    row = result.scalar_one_or_none()
+    return row is not None
 
 
 async def has_used_referral_tariff(session: AsyncSession, user_id: int) -> bool:
     result = await session.execute(
-        select(Payment)
+        select(Payment.id)
         .join(Tariff, Payment.tariff_id == Tariff.id)
-        .where(
-            Payment.user_id == user_id,
-            Payment.status == "approved",
-            Tariff.is_referral == True,
-        )
+        .where(Payment.user_id == user_id, Payment.status == "approved", Tariff.is_referral == True)
     )
     return result.scalar_one_or_none() is not None
 
 
 async def has_any_approved_payment(session: AsyncSession, user_id: int) -> bool:
     result = await session.execute(
-        select(Payment).where(
-            Payment.user_id == user_id,
-            Payment.status == "approved",
-        )
+        select(Payment.id).where(Payment.user_id == user_id, Payment.status == "approved")
     )
     return result.scalar_one_or_none() is not None
 
@@ -288,16 +244,13 @@ async def has_any_approved_payment(session: AsyncSession, user_id: int) -> bool:
 # ── Promo codes ────────────────────────────────────────────────────────────
 
 async def get_promo_by_code(session: AsyncSession, code: str) -> Optional[PromoCode]:
-    result = await session.execute(
-        select(PromoCode).where(PromoCode.code == code.upper())
-    )
+    result = await session.execute(select(PromoCode).where(PromoCode.code == code.upper()))
     return result.scalar_one_or_none()
 
 
 async def validate_promo(
     session: AsyncSession, code: str, tariff_id: int
 ) -> tuple[Optional[PromoCode], Optional[str]]:
-    """Возвращает (promo, error_text). error_text=None если промокод валиден."""
     promo = await get_promo_by_code(session, code)
     if not promo:
         return None, "Промокод не найден."
@@ -306,13 +259,13 @@ async def validate_promo(
     if promo.expires_at and promo.expires_at < datetime.utcnow():
         return None, "Срок действия промокода истёк."
     if promo.used_count >= promo.max_uses:
-        return None, "Промокод уже использован максимальное количество раз."
+        return None, "Промокод исчерпан."
     if promo.tariff_id and promo.tariff_id != tariff_id:
-        return None, "Промокод не применяется к выбранному тарифу."
+        return None, "Промокод не применяется к этому тарифу."
     return promo, None
 
 
-async def apply_promo_discount(promo: PromoCode, original_price: float) -> float:
+def apply_promo_discount(promo: PromoCode, original_price: float) -> float:
     price = original_price
     if promo.discount_fixed:
         price -= float(promo.discount_fixed)
@@ -323,18 +276,14 @@ async def apply_promo_discount(promo: PromoCode, original_price: float) -> float
 
 async def use_promo(session: AsyncSession, promo_id: int) -> None:
     await session.execute(
-        update(PromoCode)
-        .where(PromoCode.id == promo_id)
+        update(PromoCode).where(PromoCode.id == promo_id)
         .values(used_count=PromoCode.used_count + 1)
     )
     await session.commit()
 
 
 async def create_promo(session: AsyncSession, **kwargs) -> PromoCode:
-    allowed = {
-        "code", "discount_percent", "discount_fixed",
-        "tariff_id", "max_uses", "expires_at", "is_active",
-    }
+    allowed = {"code", "discount_percent", "discount_fixed", "tariff_id", "max_uses", "expires_at", "is_active"}
     data = {k: v for k, v in kwargs.items() if k in allowed}
     if "code" in data:
         data["code"] = data["code"].upper()
@@ -346,9 +295,7 @@ async def create_promo(session: AsyncSession, **kwargs) -> PromoCode:
 
 
 async def get_all_promos(session: AsyncSession) -> list[PromoCode]:
-    result = await session.execute(
-        select(PromoCode).order_by(PromoCode.created_at.desc())
-    )
+    result = await session.execute(select(PromoCode).order_by(PromoCode.created_at.desc()))
     return result.scalars().all()
 
 
@@ -366,10 +313,7 @@ async def delete_promo(session: AsyncSession, promo_id: int) -> None:
 
 async def get_open_ticket(session: AsyncSession, user_id: int) -> Optional[SupportTicket]:
     result = await session.execute(
-        select(SupportTicket).where(
-            SupportTicket.user_id == user_id,
-            SupportTicket.status == "open",
-        )
+        select(SupportTicket).where(SupportTicket.user_id == user_id, SupportTicket.status == "open")
     )
     return result.scalar_one_or_none()
 
@@ -390,19 +334,13 @@ async def close_ticket(session: AsyncSession, ticket_id: int) -> None:
 
 
 async def add_ticket_message(
-    session: AsyncSession, ticket_id: int, sender_role: str,
-    sender_tg_id: int, text: Optional[str] = None,
-    media_file_id: Optional[str] = None, media_type: Optional[str] = None,
-    tg_message_id: Optional[int] = None,
+    session: AsyncSession, ticket_id: int, sender_role: str, sender_tg_id: int,
+    text: Optional[str] = None, media_file_id: Optional[str] = None,
+    media_type: Optional[str] = None, tg_message_id: Optional[int] = None,
 ) -> TicketMessage:
     msg = TicketMessage(
-        ticket_id=ticket_id,
-        sender_role=sender_role,
-        sender_tg_id=sender_tg_id,
-        text=text,
-        media_file_id=media_file_id,
-        media_type=media_type,
-        tg_message_id=tg_message_id,
+        ticket_id=ticket_id, sender_role=sender_role, sender_tg_id=sender_tg_id,
+        text=text, media_file_id=media_file_id, media_type=media_type, tg_message_id=tg_message_id,
     )
     session.add(msg)
     await session.commit()
@@ -430,8 +368,7 @@ async def get_closed_tickets(
     )
     if user_id:
         q = q.where(SupportTicket.user_id == user_id)
-    q = q.order_by(SupportTicket.updated_at.desc()).limit(limit)
-    result = await session.execute(q)
+    result = await session.execute(q.order_by(SupportTicket.updated_at.desc()).limit(limit))
     return result.scalars().all()
 
 
@@ -496,14 +433,13 @@ async def get_active_custom_buttons(session: AsyncSession) -> list[CustomMenuBut
 
 
 async def get_all_custom_buttons(session: AsyncSession) -> list[CustomMenuButton]:
-    result = await session.execute(
-        select(CustomMenuButton).order_by(CustomMenuButton.sort_order)
-    )
+    result = await session.execute(select(CustomMenuButton).order_by(CustomMenuButton.sort_order))
     return result.scalars().all()
 
 
-async def create_custom_button(session: AsyncSession, text: str, url: str,
-                                condition: str = "all", sort_order: int = 0) -> CustomMenuButton:
+async def create_custom_button(
+    session: AsyncSession, text: str, url: str, condition: str = "all", sort_order: int = 0
+) -> CustomMenuButton:
     btn = CustomMenuButton(text=text, url=url, condition=condition, sort_order=sort_order)
     session.add(btn)
     await session.commit()
