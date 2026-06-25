@@ -6,9 +6,11 @@ from datetime import datetime, timezone, timedelta
 
 from aiohttp import web
 from aiogram import Bot
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config.settings import settings
 from db import dal
+from bot.services.notifications import notify_admins
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +19,27 @@ USER_EXPIRING_EVENTS = {
     "user.expires_in_24_hours": 1,
     "user.expires_in_48_hours": 2,
     "user.expires_in_72_hours": 3,
+}
+
+# События для уведомлений админам
+ADMIN_NOTIFY_EVENTS = {
+    "user.created": "🆕",
+    "user.activated": "✅",
+    "user.deactivated": "⛔",
+    "user.expired": "⚠️",
+    "user.limited": "📊",
+    "user.disabled": "🚫",
+    "node.connected": "🟢",
+    "node.disconnected": "🔴",
+    "payment.created": "💳",
+    "payment.approved": "💰",
+    "payment.rejected": "❌",
+    "torrent.blocked": "🚨",
+    "user.bandwidth_threshold_60": "📈",
+    "user.bandwidth_threshold_80": "📊",
+    "user.not_connected_6h": "📱",
+    "user.not_connected_24h": "📱",
+    "user.not_connected_48h": "📱",
 }
 
 
@@ -44,15 +67,20 @@ async def handle_webhook(request: web.Request) -> web.Response:
 
     scope = payload.get("scope", "")
     event = payload.get("event", "")
-    data  = payload.get("data", {})
+    data = payload.get("data", {})
 
     logger.info(f"Webhook: scope={scope} event={event}")
 
     bot: Bot = request.app["bot"]
 
     try:
+        # Обработка пользовательских событий (уведомления пользователю)
         if scope == "user":
             await _handle_user_event(bot, event, data)
+        
+        # Уведомления админам для всех событий
+        if event in ADMIN_NOTIFY_EVENTS:
+            await _notify_admins_about_event(bot, scope, event, data)
     except Exception as e:
         logger.error(f"Webhook handler error: {e}", exc_info=True)
 
@@ -103,6 +131,131 @@ async def _handle_user_event(bot: Bot, event: str, data: dict):
                 except Exception as e:
                     logger.warning(f"Webhook expiring notify failed for {tg_id}: {e}")
                 await dal.log_notification(session, user.id, "wh_expiring", meta)
+
+        # Предупреждение пользователя при блокировке торрента
+        elif event == "torrent.blocked":
+            await _warn_user_about_torrent(bot, user, data)
+
+
+async def _warn_user_about_torrent(bot: Bot, user, data: dict):
+    """Отправляет предупреждение пользователю о блокировке торрента."""
+    try:
+        await bot.send_message(
+            user.telegram_id,
+            "🚨 <b>Обнаружена загрузка торрентов!</b>\n\n"
+            "⚠️ Загрузка торрентов запрещена правилами сервиса.\n"
+            "При повторных нарушениях подписка может быть заблокирована.\n\n"
+            "Пожалуйста, используйте сервис только для легального контента.",
+            parse_mode="HTML",
+            disable_notification=False,
+        )
+        logger.info(f"Torrent warning sent to {user.telegram_id}")
+    except Exception as e:
+        logger.warning(f"Failed to send torrent warning to {user.telegram_id}: {e}")
+
+
+async def _notify_admins_about_event(bot: Bot, scope: str, event: str, data: dict):
+    """Форматирует и отправляет уведомление админам о событии."""
+    emoji = ADMIN_NOTIFY_EVENTS.get(event, "📢")
+    title = _get_event_title(event)
+    details = _format_event_details(scope, event, data)
+    
+    text = f"{emoji} <b>{title}</b>\n\n{details}"
+    
+    # Добавляем кнопки действий для некоторых событий
+    keyboard = None
+    if event == "torrent.blocked":
+        tg_id = data.get("telegramId")
+        if tg_id:
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="👤 Профиль пользователя", callback_data=f"admin_view_user_{tg_id}")]
+            ])
+    
+    await notify_admins(bot, text, parse_mode="HTML")
+
+
+def _get_event_title(event: str) -> str:
+    """Возвращает русское название события."""
+    titles = {
+        "user.created": "Новый пользователь",
+        "user.activated": "Пользователь активирован",
+        "user.deactivated": "Пользователь деактивирован",
+        "user.expired": "Подписка истекла",
+        "user.limited": "Лимит трафика достигнут",
+        "user.disabled": "Подписка отключена",
+        "user.expires_in_24_hours": "Подписка истекает через 1 день",
+        "user.expires_in_48_hours": "Подписка истекает через 2 дня",
+        "user.expires_in_72_hours": "Подписка истекает через 3 дня",
+        "node.connected": "Нода подключена",
+        "node.disconnected": "Нода отключена",
+        "payment.created": "Оплата создана",
+        "payment.approved": "Оплата одобрена",
+        "payment.rejected": "Оплата отклонена",
+        "torrent.blocked": "Торрент заблокирован",
+        "user.bandwidth_threshold_60": "Использовано 60% трафика",
+        "user.bandwidth_threshold_80": "Использовано 80% трафика",
+        "user.not_connected_6h": "Не подключался 6 часов",
+        "user.not_connected_24h": "Не подключался 24 часа",
+        "user.not_connected_48h": "Не подключался 48 часов",
+    }
+    return titles.get(event, event)
+
+
+def _format_event_details(scope: str, event: str, data: dict) -> str:
+    """Форматирует детали события для уведомления."""
+    lines = []
+    
+    # Пользователь
+    username = data.get("username") or data.get("shortUuid") or "—"
+    tg_id = data.get("telegramId")
+    
+    if scope == "user" or "telegramId" in data:
+        lines.append(f"👤 <code>{username}</code>")
+        if tg_id:
+            lines.append(f"🆔 Telegram ID: <code>{tg_id}</code>")
+    
+    # Подписка
+    if "expireAt" in data:
+        try:
+            expire_at = datetime.fromisoformat(data["expireAt"].replace("Z", "+00:00"))
+            lines.append(f"📅 Истекает: {expire_at.strftime('%d.%m.%Y %H:%M')}")
+        except:
+            pass
+    
+    if "status" in data:
+        lines.append(f"📊 Статус: {data['status']}")
+    
+    # Трафик
+    if "trafficUsedBytes" in data:
+        traffic_gb = data["trafficUsedBytes"] / (1024**3)
+        lines.append(f"📈 Трафик: {traffic_gb:.2f} ГБ")
+    
+    if "lifetimeTrafficUsedBytes" in data:
+        traffic_gb = data["lifetimeTrafficUsedBytes"] / (1024**3)
+        lines.append(f"📊 Всего трафика: {traffic_gb:.2f} ГБ")
+    
+    # Нода
+    if scope == "node":
+        node_name = data.get("name") or data.get("nodeName") or "—"
+        lines.append(f"🖥 Нода: <code>{node_name}</code>")
+        if "address" in data:
+            lines.append(f"🌐 Адрес: {data['address']}")
+    
+    # Оплата
+    if scope == "crm" or "paymentId" in data:
+        if "amount" in data:
+            lines.append(f"💵 Сумма: {data['amount']} ₽")
+        if "method" in data:
+            lines.append(f"💳 Метод: {data['method']}")
+    
+    # Торрент
+    if event == "torrent.blocked":
+        if "torrentHash" in data:
+            lines.append(f"🔗 Hash: <code>{data['torrentHash'][:16]}...</code>")
+        if "fileName" in data:
+            lines.append(f"📁 Файл: {data['fileName']}")
+    
+    return "\n".join(lines) if lines else "Нет данных"
 
 
 async def _maybe_revoke_mtproto(bot: Bot, user, data: dict):
