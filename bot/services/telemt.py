@@ -87,6 +87,38 @@ def _user_in_config(config: str, username: str) -> bool:
     return False
 
 
+def _is_user_commented(config: str, username: str) -> bool:
+    """Проверяет закомментирован ли пользователь в [access.users]."""
+    pattern = re.compile(rf'^#\s*{re.escape(username)}\s*=\s*"[0-9a-f]{{32}}"', re.MULTILINE)
+    return bool(pattern.search(config))
+
+
+def _comment_user_line(config: str, username: str) -> str:
+    """Комментирует строку пользователя в [access.users]."""
+    lines = config.splitlines()
+    new_lines = []
+    for line in lines:
+        m = re.match(r'^(\w+)\s*=\s*"[0-9a-f]{32}"', line.strip())
+        if m and m.group(1) == username:
+            new_lines.append(f"# {line}")
+        else:
+            new_lines.append(line)
+    return "\n".join(new_lines) + "\n"
+
+
+def _uncomment_user_line(config: str, username: str) -> str:
+    """Раскомментирует строку пользователя в [access.users]."""
+    lines = config.splitlines()
+    new_lines = []
+    for line in lines:
+        m = re.match(rf'^#\s*({re.escape(username)})\s*=\s*"[0-9a-f]{{32}}"', line.strip())
+        if m:
+            new_lines.append(line.lstrip("# ").lstrip())
+        else:
+            new_lines.append(line)
+    return "\n".join(new_lines) + "\n"
+
+
 # ── Public API ─────────────────────────────────────────────────────────────
 
 def generate_secret() -> str:
@@ -150,11 +182,54 @@ def _remove_ip_limit_line(config: str, username: str) -> str:
     return "\n".join(result) + "\n"
 
 
+def _comment_ip_limit_line(config: str, username: str) -> str:
+    """Комментирует строку пользователя в [access.user_max_unique_ips]."""
+    lines = config.splitlines()
+    new_lines = []
+    for line in lines:
+        m = re.match(r'^(\w+)\s*=\s*(\d+)', line.strip())
+        if m and m.group(1) == username:
+            new_lines.append(f"# {line}")
+        else:
+            new_lines.append(line)
+    return "\n".join(new_lines) + "\n"
+
+
+def _uncomment_ip_limit_line(config: str, username: str) -> str:
+    """Раскомментирует строку пользователя в [access.user_max_unique_ips]."""
+    lines = config.splitlines()
+    new_lines = []
+    for line in lines:
+        m = re.match(rf'^#\s*({re.escape(username)})\s*=\s*(\d+)', line.strip())
+        if m:
+            new_lines.append(line.lstrip("# ").lstrip())
+        else:
+            new_lines.append(line)
+    return "\n".join(new_lines) + "\n"
+
+
 def add_user(username: str, secret: str, max_ips: int = 1) -> None:
-    """Добавляет пользователя в конфиг. Hot-reload, рестарт не нужен."""
+    """Добавляет пользователя в конфиг. Если закомментирован — раскомментирует."""
     config = _read_config()
-    if not _user_in_config(config, username):
-        config = _add_user_line(config, username, secret)
+    
+    # Если закомментирован — раскомментируем
+    if _is_user_commented(config, username):
+        config = _uncomment_user_line(config, username)
+        config = _uncomment_ip_limit_line(config, username)
+        config = _add_ip_limit_line(config, username, max_ips)
+        _write_config(config)
+        logger.info(f"telemt: uncommented user {username} (max_ips={max_ips})")
+        return
+    
+    # Если уже есть — просто обновляем max_ips
+    if _user_in_config(config, username):
+        config = _add_ip_limit_line(config, username, max_ips)
+        _write_config(config)
+        logger.info(f"telemt: updated max_ips for {username} (max_ips={max_ips})")
+        return
+    
+    # Новый пользователь
+    config = _add_user_line(config, username, secret)
     config = _add_ip_limit_line(config, username, max_ips)
     _write_config(config)
     logger.info(f"telemt: added user {username} (max_ips={max_ips})")
@@ -169,6 +244,17 @@ def remove_user(username: str) -> None:
     config = _remove_ip_limit_line(config, username)
     _write_config(config)
     logger.info(f"telemt: removed user {username}")
+
+
+def comment_user(username: str) -> None:
+    """Комментирует пользователя в [access.users] и [access.user_max_unique_ips]."""
+    config = _read_config()
+    if not _user_in_config(config, username):
+        return
+    config = _comment_user_line(config, username)
+    config = _comment_ip_limit_line(config, username)
+    _write_config(config)
+    logger.info(f"telemt: commented user {username}")
 
 
 def user_exists(username: str) -> bool:
