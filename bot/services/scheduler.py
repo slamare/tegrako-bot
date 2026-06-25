@@ -58,8 +58,10 @@ async def check_expiring_subscriptions(bot: Bot, panel_by_uuid: dict):
 
 
 async def revoke_expired_mtproto(bot: Bot, panel_by_uuid: dict):
-    from sqlalchemy import update as sa_update
-    from db.models import User
+    """Комментирует в telemt тех, у кого подписка истекла более 5 дней назад.
+    
+    Секрет НЕ сбрасывается в БД — при продлении пользователь восстановится автоматически.
+    """
     from db.database import async_session_maker
     from bot.services import telemt as telemt_svc
 
@@ -81,18 +83,13 @@ async def revoke_expired_mtproto(bot: Bot, panel_by_uuid: dict):
 
         for user in to_revoke:
             try:
-                telemt_svc.remove_user(user.remnawave_username)
+                # Комментируем вместо удаления — секрет сохраняется в конфиге
+                telemt_svc.comment_user(user.remnawave_username)
             except Exception as e:
-                logger.warning(f"telemt remove failed for {user.remnawave_username}: {e}")
-
-        tg_ids = [u.telegram_id for u in to_revoke]
-        await session.execute(
-            sa_update(User).where(User.telegram_id.in_(tg_ids)).values(mtproto_secret=None)
-        )
-        await session.commit()
+                logger.warning(f"telemt comment failed for {user.remnawave_username}: {e}")
 
         for user in to_revoke:
-            logger.info(f"MTProto revoked for {user.remnawave_username}")
+            logger.info(f"MTProto commented for {user.remnawave_username}")
             try:
                 await bot.send_message(
                     user.telegram_id,
