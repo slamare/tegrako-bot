@@ -34,9 +34,27 @@ _notification_cache = TTLCache(maxsize=1000, ttl=30)
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _has_active_proxy_access(rw) -> bool:
-    if not rw or rw.status.value != "ACTIVE":
+    """Проверяет доступ к MTProto прокси.
+    
+    Показываем если:
+    - Подписка ACTIVE
+    - ИЛИ подписка EXPIRED, но прошло менее 5 дней (grace period)
+    """
+    if not rw:
         return False
-    return (rw.expire_at - datetime.now(timezone.utc)).days > 5
+    
+    status = rw.status.value
+    now = datetime.now(timezone.utc)
+    
+    if status == "ACTIVE":
+        return True
+    
+    # Grace period: 5 дней после истечения
+    if status == "EXPIRED":
+        days_since_expired = (now - rw.expire_at).days
+        return days_since_expired < 5
+    
+    return False
 
 
 async def _get_menu_kb(session, tg_id: int, remnawave_uuid: str | None) -> InlineKeyboardMarkup:
@@ -502,10 +520,10 @@ async def menu_proxy(callback: CallbackQuery, session: AsyncSession):
         return
 
     await edit_or_answer(callback,
-        " <b>Proxy для Telegram</b>\n\n"
+        "📡 <b>Proxy для Telegram</b>\n\n"
         "Нажмите кнопку чтобы подключить прокси в Telegram.\n\n"
-        "⚠️ <b>Ссылка персональная.</b> Не передавайте её другим.\n\n"
-        "🔒 Деактивируется если подписка не оплачена более 5 дней.",
+        "⚠️ <b>Ссылка персональная.</b> Не передавайте её другим — при обнаружении посторонних подключений ссылка будет сброшена.\n\n"
+        "🔒 Деактивируется автоматически если подписка не оплачена более 5 дней.",
         parse_mode="HTML",
         reply_markup=proxy_kb(link),
     )
