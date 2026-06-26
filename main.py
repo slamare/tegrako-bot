@@ -16,12 +16,14 @@ from bot.services.scheduler import scheduler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-
 async def main():
-    init_db(settings.DATABASE_URL)
+    await init_db(settings.DATABASE_URL)
     await create_tables()
 
-    bot = Bot(token=settings.BOT_TOKEN)
+    from aiogram.client.session.aiohttp import AiohttpSession
+    session = AiohttpSession(proxy=settings.TELEGRAM_BOT_PROXY) if settings.TELEGRAM_BOT_PROXY else None
+    bot = Bot(token=settings.BOT_TOKEN, session=session) if session else Bot(token=settings.BOT_TOKEN)
+
     dp = Dispatcher(storage=MemoryStorage())
 
     for mw in (DatabaseMiddleware(), BanCheckMiddleware()):
@@ -46,7 +48,6 @@ async def main():
     asyncio.create_task(scheduler(bot))
     logger.info("Bot started")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
-
 
 if __name__ == "__main__":
     asyncio.run(main())
