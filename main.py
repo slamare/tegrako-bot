@@ -16,12 +16,44 @@ from bot.services.scheduler import scheduler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+
+def _build_bot_session():
+    """Создаёт aiohttp-сессию для бота с поддержкой SOCKS/HTTP proxy."""
+    proxy_url = settings.TELEGRAM_BOT_PROXY
+    if not proxy_url:
+        return None
+
+    from aiogram.client.session.aiohttp import AiohttpSession
+
+    if proxy_url.startswith("socks"):
+        # SOCKS4 / SOCKS5 — нужен aiohttp-socks
+        try:
+            from aiohttp_socks import ProxyConnector
+            from yarl import URL
+
+            parsed = URL(proxy_url)
+            connector = ProxyConnector.from_url(proxy_url)
+            session = AiohttpSession(connector=connector)
+            logger.info(f"Telegram bot proxy: SOCKS via {parsed.host}:{parsed.port}")
+            return session
+        except ImportError:
+            logger.error("aiohttp-socks not installed! Run: pip install aiohttp-socks")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to create SOCKS proxy session: {e}")
+            return None
+    else:
+        # HTTP/HTTPS proxy — стандартный aiohttp
+        session = AiohttpSession(proxy=proxy_url)
+        logger.info(f"Telegram bot proxy: HTTP via {proxy_url}")
+        return session
+
+
 async def main():
     await init_db(settings.DATABASE_URL)
     await create_tables()
 
-    from aiogram.client.session.aiohttp import AiohttpSession
-    session = AiohttpSession(proxy=settings.TELEGRAM_BOT_PROXY) if settings.TELEGRAM_BOT_PROXY else None
+    session = _build_bot_session()
     bot = Bot(token=settings.BOT_TOKEN, session=session) if session else Bot(token=settings.BOT_TOKEN)
 
     dp = Dispatcher(storage=MemoryStorage())
