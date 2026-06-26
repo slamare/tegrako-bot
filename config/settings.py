@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # Порт, на котором бот слушает вебхуки панели (не Telegram-вебхук)
     WEBHOOK_PORT: int = 9090
 
+    # Telegram bot proxy (optional, for countries where Telegram is blocked)
+    # Format: protocol://user:password@host:port, example: socks5://proxy:1080
+    TELEGRAM_BOT_PROXY: Optional[str] = None
+
     @property
     def admin_ids(self) -> list[int]:
         return [int(x.strip()) for x in self.ADMIN_IDS.split(",") if x.strip()]
