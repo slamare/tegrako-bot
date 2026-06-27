@@ -3,7 +3,6 @@ import logging
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher
-from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from config.settings import settings
@@ -18,40 +17,32 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 
-def _build_bot_session():
+def _make_bot() -> Bot:
     proxy_url = settings.TELEGRAM_BOT_PROXY
-    if not proxy_url:
-        return None
-    try:
-        from aiohttp_socks import ProxyConnector
-        connector = ProxyConnector.from_url(proxy_url)
-        session = AiohttpSession()
-        session._connector = connector
-        logger.info(f"Telegram bot proxy: {proxy_url}")
-        return session
-    except Exception as e:
-        logger.error(f"Proxy session failed: {e}")
-        return None
+    if proxy_url:
+        try:
+            from aiohttp_socks import ProxyConnector
+            from aiogram.client.session.aiohttp import AiohttpSession
+
+            connector = ProxyConnector.from_url(proxy_url)
+
+            class ProxiedSession(AiohttpSession):
+                def create_connector(self, app=None):
+                    return connector
+
+            bot = Bot(token=settings.BOT_TOKEN, session=ProxiedSession())
+            logger.info(f"Telegram bot proxy: {proxy_url}")
+            return bot
+        except Exception as e:
+            logger.error(f"Proxy setup failed, running without proxy: {e}")
+    return Bot(token=settings.BOT_TOKEN)
 
 
 async def main():
     init_db(settings.DATABASE_URL)
     await create_tables()
 
-    proxy_url = settings.TELEGRAM_BOT_PROXY
-    if proxy_url:
-        try:
-            from aiohttp_socks import ProxyConnector
-            import aiohttp
-            connector = ProxyConnector.from_url(proxy_url)
-            bot = Bot(token=settings.BOT_TOKEN, session=AiohttpSession(connector=connector))
-            logger.info(f"Telegram bot proxy: {proxy_url}")
-        except Exception as e:
-            logger.error(f"Proxy failed, running without proxy: {e}")
-            bot = Bot(token=settings.BOT_TOKEN)
-    else:
-        bot = Bot(token=settings.BOT_TOKEN)
-
+    bot = _make_bot()
     dp = Dispatcher(storage=MemoryStorage())
 
     for mw in (DatabaseMiddleware(), BanCheckMiddleware()):
