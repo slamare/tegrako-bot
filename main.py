@@ -3,6 +3,7 @@ import logging
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from config.settings import settings
@@ -21,18 +22,9 @@ def _make_bot() -> Bot:
     proxy_url = settings.TELEGRAM_BOT_PROXY
     if proxy_url:
         try:
-            from aiohttp_socks import ProxyConnector
-            from aiogram.client.session.aiohttp import AiohttpSession
-
-            connector = ProxyConnector.from_url(proxy_url)
-
-            class ProxiedSession(AiohttpSession):
-                def create_connector(self, app=None):
-                    return connector
-
-            bot = Bot(token=settings.BOT_TOKEN, session=ProxiedSession())
+            session = AiohttpSession(proxy=proxy_url)
             logger.info(f"Telegram bot proxy: {proxy_url}")
-            return bot
+            return Bot(token=settings.BOT_TOKEN, session=session)
         except Exception as e:
             logger.error(f"Proxy setup failed, running without proxy: {e}")
     return Bot(token=settings.BOT_TOKEN)
