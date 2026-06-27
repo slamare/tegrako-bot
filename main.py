@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def _build_bot_session():
-    """Создаёт aiohttp-сессию для бота с поддержкой SOCKS/HTTP proxy."""
+    """Создает aiohttp-сессию для бота с поддержкой SOCKS/HTTP proxy."""
     proxy_url = settings.TELEGRAM_BOT_PROXY
     if not proxy_url:
         return None
@@ -50,7 +50,7 @@ def _build_bot_session():
 
 
 async def main():
-    await init_db(settings.DATABASE_URL)
+    init_db(settings.DATABASE_URL)
     await create_tables()
 
     session = _build_bot_session()
