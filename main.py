@@ -3,6 +3,7 @@ import logging
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from config.settings import settings
@@ -18,43 +19,38 @@ logger = logging.getLogger(__name__)
 
 
 def _build_bot_session():
-    """Создает aiohttp-сессию для бота с поддержкой SOCKS/HTTP proxy."""
     proxy_url = settings.TELEGRAM_BOT_PROXY
     if not proxy_url:
         return None
-
-    from aiogram.client.session.aiohttp import AiohttpSession
-
-    if proxy_url.startswith("socks"):
-        # SOCKS4 / SOCKS5 — нужен aiohttp-socks
-        try:
-            from aiohttp_socks import ProxyConnector
-            from yarl import URL
-
-            parsed = URL(proxy_url)
-            connector = ProxyConnector.from_url(proxy_url)
-            session = AiohttpSession(connector=connector)
-            logger.info(f"Telegram bot proxy: SOCKS via {parsed.host}:{parsed.port}")
-            return session
-        except ImportError:
-            logger.error("aiohttp-socks not installed! Run: pip install aiohttp-socks")
-            return None
-        except Exception as e:
-            logger.error(f"Failed to create SOCKS proxy session: {e}")
-            return None
-    else:
-        # HTTP/HTTPS proxy — стандартный aiohttp
-        session = AiohttpSession(proxy=proxy_url)
-        logger.info(f"Telegram bot proxy: HTTP via {proxy_url}")
+    try:
+        from aiohttp_socks import ProxyConnector
+        connector = ProxyConnector.from_url(proxy_url)
+        session = AiohttpSession()
+        session._connector = connector
+        logger.info(f"Telegram bot proxy: {proxy_url}")
         return session
+    except Exception as e:
+        logger.error(f"Proxy session failed: {e}")
+        return None
 
 
 async def main():
     init_db(settings.DATABASE_URL)
     await create_tables()
 
-    session = _build_bot_session()
-    bot = Bot(token=settings.BOT_TOKEN, session=session) if session else Bot(token=settings.BOT_TOKEN)
+    proxy_url = settings.TELEGRAM_BOT_PROXY
+    if proxy_url:
+        try:
+            from aiohttp_socks import ProxyConnector
+            import aiohttp
+            connector = ProxyConnector.from_url(proxy_url)
+            bot = Bot(token=settings.BOT_TOKEN, session=AiohttpSession(connector=connector))
+            logger.info(f"Telegram bot proxy: {proxy_url}")
+        except Exception as e:
+            logger.error(f"Proxy failed, running without proxy: {e}")
+            bot = Bot(token=settings.BOT_TOKEN)
+    else:
+        bot = Bot(token=settings.BOT_TOKEN)
 
     dp = Dispatcher(storage=MemoryStorage())
 
