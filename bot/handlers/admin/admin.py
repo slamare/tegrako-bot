@@ -1385,3 +1385,12 @@ async def catch_media_in_fsm(message: Message, state: FSMContext):
         pass
     msg = await message.answer("📎 Здесь ожидается текстовый ввод.", disable_notification=True)
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
+
+
+@router.callback_query(F.data == "notify_dismiss")
+async def notify_dismiss(callback: CallbackQuery):
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.answer()
