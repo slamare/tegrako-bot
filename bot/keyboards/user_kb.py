@@ -97,6 +97,7 @@ def devices_kb(devices: list, show_buy_slot: bool = False) -> InlineKeyboardMark
 def proxy_kb(proxy_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔗 Подключить прокси", url=proxy_url)],
+        [InlineKeyboardButton(text="🔄 Перевыпустить ссылку", callback_data="revoke_mtproxy")],
         [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
     ])
 

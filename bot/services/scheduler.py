@@ -141,12 +141,7 @@ async def scheduler(bot: Bot):
             panel_users = await remnawave.get_all_users_bulk()
             panel_by_uuid = {u.uuid: u for u in panel_users}
             logger.info(f"Scheduler: loaded {len(panel_by_uuid)} users from panel")
-            
-            # Синхронизация MTProto при старте (только в первом цикле)
-            if not hasattr(scheduler, '_mtproto_synced'):
-                await sync_mtproto_users(bot, panel_by_uuid)
-                scheduler._mtproto_synced = True
-            
+                        
             await check_expiring_subscriptions(bot, panel_by_uuid)
             await revoke_expired_mtproto(bot, panel_by_uuid)
         except Exception as e:

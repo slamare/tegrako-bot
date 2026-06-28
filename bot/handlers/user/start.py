@@ -527,6 +527,44 @@ async def menu_proxy(callback: CallbackQuery, session: AsyncSession):
         parse_mode="HTML",
         reply_markup=proxy_kb(link),
     )
+    
+@router.callback_query(F.data == "revoke_mtproxy")
+async def revoke_mtproxy(callback: CallbackQuery, session: AsyncSession):
+    from bot.services import telemt as telemt_svc
+    
+    user = await dal.get_user(session, callback.from_user.id)
+    if not user or not user.mtproto_secret or not user.remnawave_uuid:
+        await callback.answer("Прокси недоступен.", show_alert=True)
+        return
+    
+    rw = await remnawave.get_subscription_info(user.remnawave_uuid)
+    if not rw:
+        await callback.answer("Не удалось получить информацию о подписке.", show_alert=True)
+        return
+    
+    # Если лимит не установлен (0) — ставим 5 для поддержки сторонних клиентов
+    max_ips = max(1, rw.hwid_device_limit) if rw.hwid_device_limit else 5
+    
+    # Генерируем новый секрет
+    new_secret = telemt_svc.generate_secret()
+    
+    # Обновляем в telemt API
+    try:
+        await telemt_svc.add_user(user.remnawave_username, new_secret, max_ips=max_ips)
+        await dal.update_user(session, user.telegram_id, mtproto_secret=new_secret)
+        
+        # Строим новую ссылку
+        link = telemt_svc.build_link_fallback(new_secret)
+        
+        await edit_or_answer(callback,
+            "📡 <b>Ссылка перевыпущена</b>\n\n"
+            "Старая ссылка больше не работает. Используйте новую:",
+            parse_mode="HTML",
+            reply_markup=proxy_kb(link),
+        )
+    except Exception as e:
+        logger.warning(f"MTProxy revoke failed for {user.telegram_id}: {e}")
+        await callback.answer("Ошибка при перевыпуске.", show_alert=True)
 
 
 # ── Поддержка (вход через меню) ───────────────────────────────────────────────

@@ -42,7 +42,14 @@ async def _provision_mtproto(session: AsyncSession, user, tariff) -> None:
     """Выдаёт или обновляет MTProto-секрет пользователя в telemt."""
     try:
         from bot.services import telemt as telemt_svc
-        max_ips = max(1, tariff.device_limit) if tariff and tariff.device_limit else 1
+        from bot.services import remnawave
+        
+        # Получаем hwid_device_limit из Remnawave API
+        rw = await remnawave.get_subscription_info(user.remnawave_uuid) if user.remnawave_uuid else None
+        hwid_limit = rw.hwid_device_limit if rw else 0
+        
+        # Если лимит не установлен (0) — ставим 5 для поддержки сторонних клиентов
+        max_ips = max(1, hwid_limit) if hwid_limit else 5
         if not user.mtproto_secret:
             secret = telemt_svc.generate_secret()
             await telemt_svc.add_user(user.remnawave_username, secret, max_ips=max_ips)
