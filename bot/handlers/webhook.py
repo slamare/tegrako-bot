@@ -21,7 +21,6 @@ USER_EXPIRING_EVENTS = {
     "user.expires_in_72_hours": 3,
 }
 
-# События для уведомлений админам
 ADMIN_NOTIFY_EVENTS = {
     "user.created": "🆕",
     "user.activated": "✅",
@@ -31,15 +30,17 @@ ADMIN_NOTIFY_EVENTS = {
     "user.disabled": "🚫",
     "node.connected": "🟢",
     "node.disconnected": "🔴",
-    "payment.created": "💳",
-    "payment.approved": "💰",
-    "payment.rejected": "❌",
     "torrent.blocked": "🚨",
     "user.bandwidth_threshold_60": "📈",
     "user.bandwidth_threshold_80": "📊",
     "user.not_connected_6h": "📱",
     "user.not_connected_24h": "📱",
     "user.not_connected_48h": "📱",
+    # системные события панели
+    "system.auth": "🔐",
+    "panel.started": "🟢",
+    "panel.stopped": "🔴",
+    "panel.error": "💥",
 }
 
 
@@ -69,18 +70,19 @@ async def handle_webhook(request: web.Request) -> web.Response:
     event = payload.get("event", "")
     data = payload.get("data", {})
 
-    logger.info(f"Webhook: scope={scope} event={event}")
+    logger.info(f"Webhook: scope={scope} event={event} data_keys={list(data.keys())}")
 
     bot: Bot = request.app["bot"]
 
     try:
-        # Обработка пользовательских событий (уведомления пользователю)
-        if scope == "user":
+        if scope == "user" or (event == "torrent.blocked" and data.get("telegramId")):
             await _handle_user_event(bot, event, data)
-        
-        # Уведомления админам для всех событий
+
         if event in ADMIN_NOTIFY_EVENTS:
             await _notify_admins_about_event(bot, scope, event, data)
+        else:
+            # Логируем неизвестные события чтобы понять что шлёт панель
+            logger.info(f"Webhook: unhandled event={event} scope={scope}")
     except Exception as e:
         logger.error(f"Webhook handler error: {e}", exc_info=True)
 
@@ -132,13 +134,11 @@ async def _handle_user_event(bot: Bot, event: str, data: dict):
                     logger.warning(f"Webhook expiring notify failed for {tg_id}: {e}")
                 await dal.log_notification(session, user.id, "wh_expiring", meta)
 
-        # Предупреждение пользователя при блокировке торрента
         elif event == "torrent.blocked":
             await _warn_user_about_torrent(bot, user, data)
 
 
 async def _warn_user_about_torrent(bot: Bot, user, data: dict):
-    """Отправляет предупреждение пользователю о блокировке торрента."""
     try:
         await bot.send_message(
             user.telegram_id,
@@ -147,7 +147,6 @@ async def _warn_user_about_torrent(bot: Bot, user, data: dict):
             "При повторных нарушениях подписка может быть заблокирована.\n\n"
             "Пожалуйста, используйте сервис только для легального контента.",
             parse_mode="HTML",
-            disable_notification=False,
         )
         logger.info(f"Torrent warning sent to {user.telegram_id}")
     except Exception as e:
@@ -155,27 +154,32 @@ async def _warn_user_about_torrent(bot: Bot, user, data: dict):
 
 
 async def _notify_admins_about_event(bot: Bot, scope: str, event: str, data: dict):
-    """Форматирует и отправляет уведомление админам о событии."""
     emoji = ADMIN_NOTIFY_EVENTS.get(event, "📢")
     title = _get_event_title(event)
     details = _format_event_details(scope, event, data)
-    
     text = f"{emoji} <b>{title}</b>\n\n{details}"
-    
-    # Добавляем кнопки действий для некоторых событий
+
     keyboard = None
     if event == "torrent.blocked":
         tg_id = data.get("telegramId")
         if tg_id:
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="👤 Профиль пользователя", callback_data=f"admin_view_user_{tg_id}")]
+                [InlineKeyboardButton(text="👤 Профиль", callback_data=f"admin_user:{tg_id}")]
             ])
-    
-    await notify_admins(bot, text, parse_mode="HTML")
+
+    for admin_id in settings.admin_ids:
+        try:
+            await bot.send_message(
+                chat_id=admin_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+        except Exception as e:
+            logger.warning(f"Admin notify failed for {admin_id}: {e}")
 
 
 def _get_event_title(event: str) -> str:
-    """Возвращает русское название события."""
     titles = {
         "user.created": "Новый пользователь",
         "user.activated": "Пользователь активирован",
@@ -188,73 +192,71 @@ def _get_event_title(event: str) -> str:
         "user.expires_in_72_hours": "Подписка истекает через 3 дня",
         "node.connected": "Нода подключена",
         "node.disconnected": "Нода отключена",
-        "payment.created": "Оплата создана",
-        "payment.approved": "Оплата одобрена",
-        "payment.rejected": "Оплата отклонена",
         "torrent.blocked": "Торрент заблокирован",
         "user.bandwidth_threshold_60": "Использовано 60% трафика",
         "user.bandwidth_threshold_80": "Использовано 80% трафика",
         "user.not_connected_6h": "Не подключался 6 часов",
         "user.not_connected_24h": "Не подключался 24 часа",
         "user.not_connected_48h": "Не подключался 48 часов",
+        "system.auth": "Вход в панель",
+        "panel.started": "Панель запущена",
+        "panel.stopped": "Панель остановлена",
+        "panel.error": "Ошибка панели",
     }
     return titles.get(event, event)
 
 
 def _format_event_details(scope: str, event: str, data: dict) -> str:
-    """Форматирует детали события для уведомления."""
     lines = []
-    
-    # Пользователь
+
     username = data.get("username") or data.get("shortUuid") or "—"
     tg_id = data.get("telegramId")
-    
-    if scope == "user" or "telegramId" in data:
+
+    if scope == "user" or tg_id:
         lines.append(f"👤 <code>{username}</code>")
         if tg_id:
-            lines.append(f"🆔 Telegram ID: <code>{tg_id}</code>")
-    
-    # Подписка
+            lines.append(f"🆔 <code>{tg_id}</code>")
+
     if "expireAt" in data:
         try:
             expire_at = datetime.fromisoformat(data["expireAt"].replace("Z", "+00:00"))
             lines.append(f"📅 Истекает: {expire_at.strftime('%d.%m.%Y %H:%M')}")
-        except:
+        except Exception:
             pass
-    
+
     if "status" in data:
         lines.append(f"📊 Статус: {data['status']}")
-    
-    # Трафик
+
     if "trafficUsedBytes" in data:
-        traffic_gb = data["trafficUsedBytes"] / (1024**3)
-        lines.append(f"📈 Трафик: {traffic_gb:.2f} ГБ")
-    
+        lines.append(f"📈 Трафик: {data['trafficUsedBytes'] / 1024**3:.2f} ГБ")
+
     if "lifetimeTrafficUsedBytes" in data:
-        traffic_gb = data["lifetimeTrafficUsedBytes"] / (1024**3)
-        lines.append(f"📊 Всего трафика: {traffic_gb:.2f} ГБ")
-    
-    # Нода
+        lines.append(f"📊 Всего: {data['lifetimeTrafficUsedBytes'] / 1024**3:.2f} ГБ")
+
     if scope == "node":
         node_name = data.get("name") or data.get("nodeName") or "—"
         lines.append(f"🖥 Нода: <code>{node_name}</code>")
         if "address" in data:
-            lines.append(f"🌐 Адрес: {data['address']}")
-    
-    # Оплата
-    if scope == "crm" or "paymentId" in data:
-        if "amount" in data:
-            lines.append(f"💵 Сумма: {data['amount']} ₽")
-        if "method" in data:
-            lines.append(f"💳 Метод: {data['method']}")
-    
-    # Торрент
+            lines.append(f"🌐 {data['address']}")
+
+    if event == "system.auth":
+        if "ip" in data:
+            lines.append(f"🌐 IP: <code>{data['ip']}</code>")
+        if "userAgent" in data:
+            lines.append(f"🖥 UA: {data['userAgent'][:60]}")
+        if "login" in data:
+            lines.append(f"👤 Логин: <code>{data['login']}</code>")
+
     if event == "torrent.blocked":
         if "torrentHash" in data:
             lines.append(f"🔗 Hash: <code>{data['torrentHash'][:16]}...</code>")
         if "fileName" in data:
-            lines.append(f"📁 Файл: {data['fileName']}")
-    
+            lines.append(f"📁 {data['fileName']}")
+
+    if event in ("panel.error",):
+        if "message" in data:
+            lines.append(f"💬 {data['message'][:200]}")
+
     return "\n".join(lines) if lines else "Нет данных"
 
 
