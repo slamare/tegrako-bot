@@ -101,6 +101,39 @@ async def revoke_expired_mtproto(bot: Bot, panel_by_uuid: dict):
                 pass
 
 
+async def sync_mtproto_users(bot: Bot, panel_by_uuid: dict):
+    """Синхронизирует MTProto пользователей: создаёт в telemt тех, у кого активная подписка но нет mtproto_secret."""
+    from db.database import async_session_maker
+    from bot.services import telemt as telemt_svc
+    import secrets
+
+    async with async_session_maker() as session:
+        users = await dal.get_all_users(session, only_registered=True)
+        to_sync = [
+            u for u in users
+            if not u.mtproto_secret and u.remnawave_uuid and u.remnawave_username
+            and (rw := panel_by_uuid.get(u.remnawave_uuid))
+            and rw.status.value == "ACTIVE"
+        ]
+
+        if not to_sync:
+            logger.info("MTProto sync: all users with active subscriptions have secrets")
+            return
+
+        logger.info(f"MTProto sync: found {len(to_sync)} users without secrets")
+
+        for user in to_sync:
+            try:
+                secret = telemt_svc.generate_secret()
+                await telemt_svc.add_user(user.remnawave_username, secret, max_ips=5)
+                await dal.update_user(session, user.telegram_id, mtproto_secret=secret)
+                logger.info(f"MTProto sync: created for {user.remnawave_username}")
+            except Exception as e:
+                logger.warning(f"MTProto sync failed for {user.remnawave_username}: {e}")
+
+        await session.commit()
+
+
 async def scheduler(bot: Bot):
     await asyncio.sleep(5)
     while True:
@@ -108,6 +141,12 @@ async def scheduler(bot: Bot):
             panel_users = await remnawave.get_all_users_bulk()
             panel_by_uuid = {u.uuid: u for u in panel_users}
             logger.info(f"Scheduler: loaded {len(panel_by_uuid)} users from panel")
+            
+            # Синхронизация MTProto при старте (только в первом цикле)
+            if not hasattr(scheduler, '_mtproto_synced'):
+                await sync_mtproto_users(bot, panel_by_uuid)
+                scheduler._mtproto_synced = True
+            
             await check_expiring_subscriptions(bot, panel_by_uuid)
             await revoke_expired_mtproto(bot, panel_by_uuid)
         except Exception as e:
