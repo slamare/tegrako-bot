@@ -28,7 +28,6 @@ ADMIN_NOTIFY_EVENTS = {
     "user.disabled": "🚫",
     "user.enabled": "✅",
     "user.bandwidth_usage_threshold_reached": "📈",
-    "user.not_connected": "📱",
     # node scope
     "node.connection_lost": "🔴",
     "node.connection_restored": "🟢",
@@ -131,6 +130,40 @@ async def _handle_user_event(bot: Bot, event: str, data: dict):
                 except Exception as e:
                     logger.warning(f"Webhook expiring notify failed for {tg_id}: {e}")
                 await dal.log_notification(session, user.id, "wh_expiring", meta)
+
+        elif event == "user.expired_24_hours_ago":
+            if not await dal.was_notified(session, user.id, "wh_expired_24h"):
+                try:
+                    await bot.send_message(
+                        tg_id,
+                        "😔 <b>Подписка истекла вчера.</b>\n\n"
+                        "Не теряйте доступ надолго — оформите новую подписку прямо сейчас.\n"
+                        "Нажмите «🛒 Купить подписку».",
+                        parse_mode="HTML",
+                        disable_notification=True,
+                    )
+                except Exception as e:
+                    logger.warning(f"Webhook expired_24h notify failed for {tg_id}: {e}")
+                await dal.log_notification(session, user.id, "wh_expired_24h")
+
+        elif event == "user.not_connected":
+            hours_list = data.get("notConnectedHours") or []
+            hours = hours_list[0] if hours_list else None
+            meta = f"wh_nc_{hours}" if hours else "wh_nc"
+            if not await dal.was_notified(session, user.id, "wh_not_connected", meta):
+                hours_str = f" {hours} часов" if hours else ""
+                try:
+                    await bot.send_message(
+                        tg_id,
+                        f"📱 <b>Вы ещё не подключились к VPN!</b>\n\n"
+                        f"Подписка активна, но соединение не установлено{hours_str}.\n"
+                        f"Перейдите в «👤 Личный кабинет» → «Моя подписка» чтобы получить ссылку подключения.",
+                        parse_mode="HTML",
+                        disable_notification=True,
+                    )
+                except Exception as e:
+                    logger.warning(f"Webhook not_connected notify failed for {tg_id}: {e}")
+                await dal.log_notification(session, user.id, "wh_not_connected", meta)
 
 
 async def _handle_torrent_blocker(bot: Bot, event: str, data: dict):
