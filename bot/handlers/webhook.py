@@ -163,14 +163,14 @@ async def _notify_admins(bot: Bot, scope: str, event: str, data: dict):
     details = _format_details(scope, event, data)
     text = f"{emoji} <b>{title}</b>\n\n{details}"
 
-    keyboard = None
+    buttons = []
     if event == "torrent_blocker.report":
         user_data = data.get("userData", {})
         tg_id = user_data.get("telegramId")
         if tg_id:
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="👤 Профиль", callback_data=f"admin_user:{tg_id}")]
-            ])
+            buttons.append(InlineKeyboardButton(text="👤 Профиль", callback_data=f"admin_user:{tg_id}"))
+    buttons.append(InlineKeyboardButton(text="✅ Прочитано", callback_data="notify_dismiss"))
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[buttons] if len(buttons) == 1 else [buttons[:1], buttons[1:]] if len(buttons) > 1 else [buttons])
 
     for admin_id in settings.admin_ids:
         try:
