@@ -45,10 +45,10 @@ async def _provision_mtproto(session: AsyncSession, user, tariff) -> None:
         max_ips = max(1, tariff.device_limit) if tariff and tariff.device_limit else 1
         if not user.mtproto_secret:
             secret = telemt_svc.generate_secret()
-            telemt_svc.add_user(user.remnawave_username, secret, max_ips=max_ips)
+            await telemt_svc.add_user(user.remnawave_username, secret, max_ips=max_ips)
             await dal.update_user(session, user.telegram_id, mtproto_secret=secret)
         else:
-            telemt_svc.add_user(user.remnawave_username, user.mtproto_secret, max_ips=max_ips)
+            await telemt_svc.add_user(user.remnawave_username, user.mtproto_secret, max_ips=max_ips)
     except Exception as e:
         logger.warning(f"MTProto provision failed for {user.telegram_id}: {e}")
 

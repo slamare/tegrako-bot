@@ -83,8 +83,7 @@ async def revoke_expired_mtproto(bot: Bot, panel_by_uuid: dict):
 
         for user in to_revoke:
             try:
-                # Комментируем вместо удаления — секрет сохраняется в конфиге
-                telemt_svc.comment_user(user.remnawave_username)
+                await telemt_svc.comment_user(user.remnawave_username)
             except Exception as e:
                 logger.warning(f"telemt comment failed for {user.remnawave_username}: {e}")
 

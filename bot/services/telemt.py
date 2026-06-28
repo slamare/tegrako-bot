@@ -1,11 +1,13 @@
 """
-Управление telemt MTProto прокси.
+Управление telemt MTProto прокси через HTTP API.
 
-Telemt поддерживает hot-reload конфига — изменения в telemt.toml
-подхватываются без перезапуска. Ссылки получаем через REST API на порту 9091.
+Telemt API поддерживает CRUD и персистит изменения в telemt.toml автоматически:
+  POST   /v1/users          — создать пользователя
+  PATCH  /v1/users/{name}   — обновить (max_unique_ips и др.)
+  DELETE /v1/users/{name}   — удалить
+  GET    /v1/users          — список всех
 """
 import os
-import re
 import secrets
 import logging
 from typing import Optional
@@ -14,284 +16,109 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-TELEMT_CONFIG_PATH = os.getenv("TELEMT_CONFIG_PATH", "/opt/telemt/config/telemt.toml")
 TELEMT_API_URL = os.getenv("TELEMT_API_URL", "http://127.0.0.1:9091")
+TIMEOUT = 10.0
 
-
-# ── Config helpers ─────────────────────────────────────────────────────────
-
-def _read_config() -> str:
-    with open(TELEMT_CONFIG_PATH, "r") as f:
-        return f.read()
-
-
-def _write_config(content: str) -> None:
-    tmp = TELEMT_CONFIG_PATH + ".tmp"
-    with open(tmp, "w") as f:
-        f.write(content)
-    os.replace(tmp, TELEMT_CONFIG_PATH)
-
-
-def _add_user_line(config: str, username: str, secret: str) -> str:
-    """Вставляет строку пользователя последней в секцию [access.users]."""
-    lines = config.splitlines()
-    new_line = f'{username} = "{secret}"'
-
-    # Ищем секцию [access.users]
-    section_start = None
-    for i, line in enumerate(lines):
-        if line.strip() == "[access.users]":
-            section_start = i
-            break
-
-    if section_start is None:
-        return config.rstrip("\n") + "\n[access.users]\n" + new_line + "\n"
-
-    # Ищем конец секции (следующая несвязанная секция)
-    section_end = len(lines)
-    for i in range(section_start + 1, len(lines)):
-        stripped = lines[i].strip()
-        if stripped.startswith("[") and not stripped.startswith("[["):
-            section_name = stripped.lstrip("[").rstrip("]").strip()
-            if not section_name.startswith("access."):
-                section_end = i
-                break
-
-    # Вставляем после последней непустой строки с данными в секции
-    insert_at = section_end
-    for i in range(section_end - 1, section_start, -1):
-        if lines[i].strip() and not lines[i].strip().startswith("#"):
-            insert_at = i + 1
-            break
-
-    lines.insert(insert_at, new_line)
-    return "\n".join(lines) + "\n"
-
-
-def _remove_user_line(config: str, username: str) -> str:
-    """Удаляет строку пользователя из конфига."""
-    result = []
-    for line in config.splitlines():
-        m = re.match(r'^(\w+)\s*=\s*"[0-9a-f]{32}"', line.strip())
-        if m and m.group(1) == username:
-            continue
-        result.append(line)
-    return "\n".join(result) + "\n"
-
-
-def _user_in_config(config: str, username: str) -> bool:
-    for line in config.splitlines():
-        m = re.match(r'^(\w+)\s*=\s*"[0-9a-f]{32}"', line.strip())
-        if m and m.group(1) == username:
-            return True
-    return False
-
-
-def _is_user_commented(config: str, username: str) -> bool:
-    """Проверяет закомментирован ли пользователь в [access.users]."""
-    pattern = re.compile(rf'^#\s*{re.escape(username)}\s*=\s*"[0-9a-f]{{32}}"', re.MULTILINE)
-    return bool(pattern.search(config))
-
-
-def _comment_user_line(config: str, username: str) -> str:
-    """Комментирует строку пользователя в [access.users]."""
-    lines = config.splitlines()
-    new_lines = []
-    for line in lines:
-        m = re.match(r'^(\w+)\s*=\s*"[0-9a-f]{32}"', line.strip())
-        if m and m.group(1) == username:
-            new_lines.append(f"# {line}")
-        else:
-            new_lines.append(line)
-    return "\n".join(new_lines) + "\n"
-
-
-def _uncomment_user_line(config: str, username: str) -> str:
-    """Раскомментирует строку пользователя в [access.users]."""
-    lines = config.splitlines()
-    new_lines = []
-    for line in lines:
-        m = re.match(rf'^#\s*({re.escape(username)})\s*=\s*"[0-9a-f]{{32}}"', line.strip())
-        if m:
-            new_lines.append(line.lstrip("# ").lstrip())
-        else:
-            new_lines.append(line)
-    return "\n".join(new_lines) + "\n"
-
-
-# ── Public API ─────────────────────────────────────────────────────────────
 
 def generate_secret() -> str:
     """Случайный 32-символьный hex-секрет."""
     return secrets.token_hex(16)
 
 
-def _add_ip_limit_line(config: str, username: str, max_ips: int) -> str:
-    """Вставляет/обновляет строку в [access.user_max_unique_ips]."""
-    lines = config.splitlines()
-    new_line = f"{username} = {max_ips}"
-
-    section_start = None
-    for i, line in enumerate(lines):
-        if line.strip() == "[access.user_max_unique_ips]":
-            section_start = i
-            break
-
-    if section_start is None:
-        return config.rstrip("\n") + "\n[access.user_max_unique_ips]\n" + new_line + "\n"
-
-    # Если пользователь уже есть в секции — обновляем
-    for i in range(section_start + 1, len(lines)):
-        stripped = lines[i].strip()
-        if stripped.startswith("["):
-            break
-        m = __import__("re").match(r'^(\w+)\s*=\s*(\d+)', stripped)
-        if m and m.group(1) == username:
-            lines[i] = new_line
-            return "\n".join(lines) + "\n"
-
-    # Новый — ищем конец секции и вставляем
-    section_end = len(lines)
-    for i in range(section_start + 1, len(lines)):
-        stripped = lines[i].strip()
-        if stripped.startswith("[") and not stripped.startswith("[["):
-            section_name = stripped.lstrip("[").rstrip("]").strip()
-            if not section_name.startswith("access."):
-                section_end = i
-                break
-
-    insert_at = section_end
-    for i in range(section_end - 1, section_start, -1):
-        if lines[i].strip() and not lines[i].strip().startswith("#"):
-            insert_at = i + 1
-            break
-
-    lines.insert(insert_at, new_line)
-    return "\n".join(lines) + "\n"
-
-
-def _remove_ip_limit_line(config: str, username: str) -> str:
-    """Удаляет строку пользователя из [access.user_max_unique_ips]."""
-    import re
-    result = []
-    for line in config.splitlines():
-        m = re.match(r'^(\w+)\s*=\s*(\d+)', line.strip())
-        if m and m.group(1) == username:
-            continue
-        result.append(line)
-    return "\n".join(result) + "\n"
-
-
-def _comment_ip_limit_line(config: str, username: str) -> str:
-    """Комментирует строку пользователя в [access.user_max_unique_ips]."""
-    lines = config.splitlines()
-    new_lines = []
-    for line in lines:
-        m = re.match(r'^(\w+)\s*=\s*(\d+)', line.strip())
-        if m and m.group(1) == username:
-            new_lines.append(f"# {line}")
-        else:
-            new_lines.append(line)
-    return "\n".join(new_lines) + "\n"
-
-
-def _uncomment_ip_limit_line(config: str, username: str) -> str:
-    """Раскомментирует строку пользователя в [access.user_max_unique_ips]."""
-    lines = config.splitlines()
-    new_lines = []
-    for line in lines:
-        m = re.match(rf'^#\s*({re.escape(username)})\s*=\s*(\d+)', line.strip())
-        if m:
-            new_lines.append(line.lstrip("# ").lstrip())
-        else:
-            new_lines.append(line)
-    return "\n".join(new_lines) + "\n"
-
-
-def add_user(username: str, secret: str, max_ips: int = 1) -> None:
-    """Добавляет пользователя в конфиг. Если закомментирован — раскомментирует."""
-    config = _read_config()
-    
-    # Если закомментирован — раскомментируем
-    if _is_user_commented(config, username):
-        config = _uncomment_user_line(config, username)
-        config = _uncomment_ip_limit_line(config, username)
-        config = _add_ip_limit_line(config, username, max_ips)
-        _write_config(config)
-        logger.info(f"telemt: uncommented user {username} (max_ips={max_ips})")
-        return
-    
-    # Если уже есть — просто обновляем max_ips
-    if _user_in_config(config, username):
-        config = _add_ip_limit_line(config, username, max_ips)
-        _write_config(config)
-        logger.info(f"telemt: updated max_ips for {username} (max_ips={max_ips})")
-        return
-    
-    # Новый пользователь
-    config = _add_user_line(config, username, secret)
-    config = _add_ip_limit_line(config, username, max_ips)
-    _write_config(config)
-    logger.info(f"telemt: added user {username} (max_ips={max_ips})")
-
-
-def remove_user(username: str) -> None:
-    """Удаляет пользователя из конфига."""
-    config = _read_config()
-    if not _user_in_config(config, username):
-        return
-    config = _remove_user_line(config, username)
-    config = _remove_ip_limit_line(config, username)
-    _write_config(config)
-    logger.info(f"telemt: removed user {username}")
-
-
-def comment_user(username: str) -> None:
-    """Комментирует пользователя в [access.users] и [access.user_max_unique_ips]."""
-    config = _read_config()
-    if not _user_in_config(config, username):
-        return
-    config = _comment_user_line(config, username)
-    config = _comment_ip_limit_line(config, username)
-    _write_config(config)
-    logger.info(f"telemt: commented user {username}")
-
-
-def user_exists(username: str) -> bool:
-    try:
-        return _user_in_config(_read_config(), username)
-    except Exception:
-        return False
-
-
-async def get_proxy_link(username: str) -> Optional[str]:
-    """
-    Получает ссылку tg://proxy?... через API telemt.
-    Возвращает None если API недоступен.
-    """
+async def _get_user(username: str) -> Optional[dict]:
+    """Получить данные пользователя из API. None если не найден."""
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{TELEMT_API_URL}/v1/users", timeout=5)
+            resp = await client.get(f"{TELEMT_API_URL}/v1/users", timeout=TIMEOUT)
+            resp.raise_for_status()
             data = resp.json()
-            for user in data.get("users", []):
+            for user in data.get("data", []):
                 if user.get("username") == username:
-                    links = user.get("links", {})
-                    # FakeTLS (ee) предпочтительнее всего
-                    return (
-                        links.get("ee_tls")
-                        or links.get("secure")
-                        or links.get("classic")
-                    )
+                    return user
     except Exception as e:
-        logger.warning(f"telemt API error for {username}: {e}")
+        logger.warning(f"telemt GET users failed: {e}")
     return None
 
 
+async def add_user(username: str, secret: str, max_ips: int = 1) -> None:
+    """
+    Создаёт пользователя или обновляет max_ips если уже существует.
+    Секрет сохраняется — при повторном создании с тем же секретом ссылка не меняется.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            existing = await _get_user(username)
+            if existing:
+                resp = await client.patch(
+                    f"{TELEMT_API_URL}/v1/users/{username}",
+                    json={"max_unique_ips": max_ips},
+                    timeout=TIMEOUT,
+                )
+                resp.raise_for_status()
+                logger.info(f"telemt: updated {username} (max_ips={max_ips})")
+            else:
+                resp = await client.post(
+                    f"{TELEMT_API_URL}/v1/users",
+                    json={
+                        "username": username,
+                        "secret": secret,
+                        "max_unique_ips": max_ips,
+                    },
+                    timeout=TIMEOUT,
+                )
+                resp.raise_for_status()
+                logger.info(f"telemt: added {username} (max_ips={max_ips})")
+    except Exception as e:
+        logger.error(f"telemt add_user failed for {username}: {e}")
+        raise
+
+
+async def remove_user(username: str) -> None:
+    """Удаляет пользователя из telemt (и из конфига)."""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.delete(
+                f"{TELEMT_API_URL}/v1/users/{username}",
+                timeout=TIMEOUT,
+            )
+            resp.raise_for_status()
+            logger.info(f"telemt: removed {username}")
+    except Exception as e:
+        logger.warning(f"telemt remove_user failed for {username}: {e}")
+
+
+async def comment_user(username: str) -> None:
+    """
+    Отключает MTProto для пользователя.
+    Telemt API не поддерживает комментирование, поэтому удаляем.
+    Секрет остаётся в БД — при возобновлении подписки add_user воссоздаст с тем же секретом.
+    """
+    await remove_user(username)
+
+
+async def user_exists(username: str) -> bool:
+    """Проверяет существует ли пользователь в telemt."""
+    user = await _get_user(username)
+    return user is not None
+
+
+async def get_proxy_link(username: str) -> Optional[str]:
+    """Получает ссылку tg://proxy?... через API telemt."""
+    user = await _get_user(username)
+    if not user:
+        return None
+    links = user.get("links", {})
+    tls_links = links.get("tls", [])
+    if tls_links:
+        return tls_links[0]
+    return (
+        links.get("secure", [None])[0]
+        or links.get("classic", [None])[0]
+    )
+
+
 def build_link_fallback(secret: str) -> Optional[str]:
-    """
-    Запасной вариант: строим ссылку вручную из env-переменных
-    TELEMT_PUBLIC_HOST и TELEMT_PUBLIC_PORT если API недоступен.
-    """
+    """Запасной вариант: строим ссылку вручную из env-переменных."""
     host = os.getenv("TELEMT_PUBLIC_HOST", "")
     port = os.getenv("TELEMT_PUBLIC_PORT", "")
     if not host or not port:

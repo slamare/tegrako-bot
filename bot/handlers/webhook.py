@@ -279,7 +279,7 @@ async def _maybe_revoke_mtproto(bot: Bot, user, data: dict):
         from bot.services import telemt as telemt_svc
         from db.database import async_session_maker
 
-        telemt_svc.remove_user(user.remnawave_username)
+        await telemt_svc.remove_user(user.remnawave_username)
         async with async_session_maker() as session:
             await session.execute(
                 sa_update(User)
