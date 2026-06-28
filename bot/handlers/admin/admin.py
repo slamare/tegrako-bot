@@ -1394,3 +1394,20 @@ async def notify_dismiss(callback: CallbackQuery):
     except Exception:
         pass
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("torrent_warn_user:"))
+async def torrent_warn_user(callback: CallbackQuery):
+    tg_id = int(callback.data.split(":")[1])
+    try:
+        await callback.bot.send_message(
+            tg_id,
+            "🏴\u200d☠️ <b>Предупреждение от администратора</b>\n\n"
+            "Зафиксирована загрузка торрентов через VPN.\n"
+            "Это нарушает правила сервиса.\n\n"
+            "При повторных нарушениях подписка будет заблокирована без возврата средств.",
+            parse_mode="HTML",
+        )
+        await callback.answer("✅ Сообщение отправлено")
+    except Exception as e:
+        await callback.answer(f"❌ Ошибка: {str(e)[:60]}", show_alert=True)
