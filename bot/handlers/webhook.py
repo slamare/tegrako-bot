@@ -80,6 +80,8 @@ async def handle_webhook(request: web.Request) -> web.Response:
     try:
         if scope == "user":
             await _handle_user_event(bot, event, data)
+        elif scope == "user_hwid_devices":
+            await _handle_hwid_event(bot, event, data)
         elif scope == "torrent_blocker":
             await _handle_torrent_blocker(bot, event, data)
 
@@ -190,20 +192,58 @@ async def _handle_torrent_blocker(bot: Bot, event: str, data: dict):
         logger.warning(f"Torrent warning failed for {tg_id}: {e}")
 
 
+async def _handle_hwid_event(bot: Bot, event: str, data: dict):
+    user_data = data.get("user", {}) or data
+    tg_id = user_data.get("telegramId")
+    if not tg_id:
+        return
+    from db.database import async_session_maker
+    async with async_session_maker() as session:
+        user = await dal.get_user(session, tg_id)
+        if not user:
+            return
+    if event == "user_hwid_devices.added":
+        platform = data.get("platform") or data.get("device", {}).get("platform") or "новое устройство"
+        model = data.get("deviceModel") or data.get("device", {}).get("deviceModel") or ""
+        device_str = f"{platform} {model}".strip()
+        kb_rows = [
+            [InlineKeyboardButton(text="🔄 Сбросить ссылку подписки", callback_data="revoke_subscription_confirm")],
+        ]
+        try:
+            await bot.send_message(
+                tg_id,
+                f"📱 <b>Новое устройство подключено</b>\n\n"
+                f"К вашему аккаунту добавлено: <b>{device_str}</b>\n\n"
+                f"Если это не вы — возможно ваша ссылка подписки скомпрометирована. "
+                f"Сбросьте её кнопкой ниже.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
+                disable_notification=True,
+            )
+        except Exception as e:
+            logger.warning(f"HWID added notify failed for {tg_id}: {e}")
+
+
 async def _notify_admins(bot: Bot, scope: str, event: str, data: dict):
     emoji = ADMIN_NOTIFY_EVENTS.get(event, "📢")
     title = _get_title(event)
     details = _format_details(scope, event, data)
     text = f"{emoji} <b>{title}</b>\n\n{details}"
 
-    buttons = []
+    rows = []
     if event == "torrent_blocker.report":
         user_data = data.get("userData", {})
         tg_id = user_data.get("telegramId")
         if tg_id:
-            buttons.append(InlineKeyboardButton(text="👤 Профиль", callback_data=f"admin_user:{tg_id}"))
-    buttons.append(InlineKeyboardButton(text="✅ Прочитано", callback_data="notify_dismiss"))
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[buttons] if len(buttons) == 1 else [buttons[:1], buttons[1:]] if len(buttons) > 1 else [buttons])
+            rows.append([
+                InlineKeyboardButton(text="👤 Профиль", callback_data=f"admin_user:{tg_id}"),
+                InlineKeyboardButton(text="🚫 Забанить", callback_data=f"toggle_ban:{tg_id}"),
+            ])
+            rows.append([
+                InlineKeyboardButton(text="✉️ Написать", callback_data=f"torrent_warn_user:{tg_id}"),
+            ])
+    rows.append([InlineKeyboardButton(text="✅ Прочитано", callback_data="notify_dismiss")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
 
     for admin_id in settings.admin_ids:
         try:
