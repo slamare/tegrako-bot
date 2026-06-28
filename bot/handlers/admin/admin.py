@@ -320,11 +320,30 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
                     except Exception:
                         pass
 
+            # Новому пользователю (ни разу не подключался) — инструкция по клиентам
+            ever_connected = await dal.was_notified(session, user.id, "wh_first_connected")
+            if not ever_connected:
+                confirm_text = (
+                    f"✅ <b>Оплата подтверждена!</b>\n\n"
+                    f"Тариф: {tariff.name} ({tariff.duration_days} дн.)\n\n"
+                    f"📱 <b>Как подключиться:</b>\n"
+                    f"Перейдите в «👤 Личный кабинет» → «Моя подписка» → "
+                    f"нажмите «🔗 Открыть подписку».\n\n"
+                    f"Вставьте ссылку в VPN-клиент:\n"
+                    f"• iOS — <a href=\"https://apps.apple.com/app/streisand/id6450534064\">Streisand</a>\n"
+                    f"• Android — <a href=\"https://play.google.com/store/apps/details?id=com.v2rayng.v2rayNG\">v2rayNG</a>\n"
+                    f"• Windows — <a href=\"https://github.com/2dust/v2rayN/releases/latest\">v2rayN</a>"
+                )
+            else:
+                confirm_text = (
+                    f"✅ <b>Оплата подтверждена!</b>\n\nТариф: {tariff.name} ({tariff.duration_days} дн.)\n"
+                    f"Перейдите в Личный кабинет → Моя подписка."
+                )
             await callback.bot.send_message(
                 user.telegram_id,
-                f"✅ <b>Оплата подтверждена!</b>\n\nТариф: {tariff.name} ({tariff.duration_days} дн.)\n"
-                f"Перейдите в Личный кабинет → Моя подписка.",
+                confirm_text,
                 parse_mode="HTML", disable_notification=True,
+                disable_web_page_preview=True,
             )
 
         await _mark_payment(callback.message, approved=True)
