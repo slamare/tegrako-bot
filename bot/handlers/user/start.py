@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -51,10 +53,14 @@ async def _get_menu_kb(session, tg_id: int, remnawave_uuid: str | None) -> Inlin
     show_proxy = False
     if remnawave_uuid:
         try:
-            rw = await remnawave.get_subscription_info(remnawave_uuid)
-            show_proxy = _has_active_proxy_access(rw)
-        except Exception:
-            pass
+            user = await dal.get_user(session, tg_id)
+            has_secret = bool(user and user.mtproto_secret)
+            if has_secret:
+                rw = await remnawave.get_subscription_info(remnawave_uuid)
+                show_proxy = _has_active_proxy_access(rw)
+                logger.debug(f"proxy check tg={tg_id} status={rw.status.value if rw else None} expire={rw.expire_at if rw else None} show={show_proxy}")
+        except Exception as e:
+            logger.warning(f"proxy check failed tg={tg_id}: {e}")
     return main_menu_kb(is_admin=is_adm, show_proxy=show_proxy)
 
 
