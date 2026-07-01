@@ -34,26 +34,15 @@ _notification_cache = TTLCache(maxsize=1000, ttl=30)
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _has_active_proxy_access(rw) -> bool:
-    """Проверяет доступ к MTProto прокси.
-    
-    Показываем если:
-    - Подписка ACTIVE
-    - ИЛИ подписка EXPIRED, но прошло менее 5 дней (grace period)
-    """
+    """Прокси доступен при ACTIVE или в течение 5 дней после истечения."""
     if not rw:
         return False
-    
     status = rw.status.value
-    now = datetime.now(timezone.utc)
-    
     if status == "ACTIVE":
         return True
-    
-    # Grace period: 5 дней после истечения
     if status == "EXPIRED":
-        days_since_expired = (now - rw.expire_at).days
+        days_since_expired = (datetime.now(timezone.utc) - rw.expire_at).days
         return days_since_expired < 5
-    
     return False
 
 
@@ -508,7 +497,7 @@ async def menu_proxy(callback: CallbackQuery, session: AsyncSession):
     rw = await remnawave.get_subscription_info(user.remnawave_uuid)
     if not _has_active_proxy_access(rw):
         await callback.answer(
-            "Прокси доступен только при активной подписке с запасом более 5 дней.",
+            "Прокси недоступен. Оформите подписку.",
             show_alert=True,
         )
         return
