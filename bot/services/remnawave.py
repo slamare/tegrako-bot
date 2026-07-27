@@ -2,6 +2,7 @@
 Клиент Remnawave через httpx.
 """
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ import httpx
 from cachetools import TTLCache
 
 from config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 # ── Shared client ──────────────────────────────────────────────────────────
@@ -142,7 +145,8 @@ async def username_exists(username: str) -> bool:
             _url(f"/users/by-username/{username}"), headers=_headers()
         )
         return resp.status_code == 200
-    except Exception:
+    except Exception as e:
+        logger.warning(f"username_exists({username}) failed: {e!r}")
         return False
 
 
@@ -150,10 +154,12 @@ async def get_user_by_uuid(uuid: str) -> Optional[UserInfo]:
     try:
         resp = await _get_client().get(_url(f"/users/{uuid}"), headers=_headers())
         if resp.status_code != 200:
+            logger.warning(f"get_user_by_uuid({uuid}) got status {resp.status_code}: {resp.text[:200]}")
             return None
         data = resp.json()
         return _parse_user(data.get("response", data))
-    except Exception:
+    except Exception as e:
+        logger.warning(f"get_user_by_uuid({uuid}) failed: {e!r}")
         return None
 
 
@@ -165,7 +171,8 @@ async def get_user_by_telegram_id(telegram_id: int) -> Optional[UserInfo]:
         users = resp.json().get("response", {}).get("users", [])
         u = next((x for x in users if x.get("telegramId") == telegram_id), None)
         return _parse_user(u) if u else None
-    except Exception:
+    except Exception as e:
+        logger.warning(f"get_user_by_telegram_id({telegram_id}) failed: {e!r}")
         return None
 
 
@@ -177,7 +184,8 @@ async def get_all_users_bulk() -> list[UserInfo]:
         )
         users = resp.json().get("response", {}).get("users", [])
         return [_parse_user(u) for u in users]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"get_all_users_bulk() failed: {e!r}")
         return []
 
 
@@ -210,7 +218,8 @@ async def _patch_user(payload: dict) -> Optional[UserInfo]:
         result = _parse_user(resp.json().get("response", resp.json()))
         invalidate_sub_info_cache(payload.get("uuid"))
         return result
-    except Exception:
+    except Exception as e:
+        logger.warning(f"_patch_user({payload}) failed: {e!r}")
         return None
 
 
@@ -261,8 +270,11 @@ async def delete_panel_user(uuid: str) -> bool:
         ok = resp.status_code in (200, 204)
         if ok:
             invalidate_sub_info_cache(uuid)
+        else:
+            logger.warning(f"delete_panel_user({uuid}) got status {resp.status_code}: {resp.text[:200]}")
         return ok
-    except Exception:
+    except Exception as e:
+        logger.warning(f"delete_panel_user({uuid}) failed: {e!r}")
         return False
 
 
@@ -274,8 +286,11 @@ async def reset_user_traffic(uuid: str) -> bool:
         ok = resp.status_code in (200, 201)
         if ok:
             invalidate_sub_info_cache(uuid)
+        else:
+            logger.warning(f"reset_user_traffic({uuid}) got status {resp.status_code}: {resp.text[:200]}")
         return ok
-    except Exception:
+    except Exception as e:
+        logger.warning(f"reset_user_traffic({uuid}) failed: {e!r}")
         return False
 
 
@@ -302,11 +317,13 @@ async def revoke_subscription(uuid: str) -> Optional[UserInfo]:
             _url(f"/users/{uuid}/actions/revoke"), headers=_headers()
         )
         if resp.status_code != 200:
+            logger.warning(f"revoke_subscription({uuid}) got status {resp.status_code}: {resp.text[:200]}")
             return None
         result = _parse_user(resp.json().get("response", resp.json()))
         invalidate_sub_info_cache(uuid)
         return result
-    except Exception:
+    except Exception as e:
+        logger.warning(f"revoke_subscription({uuid}) failed: {e!r}")
         return None
 
 
@@ -324,7 +341,8 @@ async def get_internal_squads() -> list[SquadInfo]:
             )
             for s in squads
         ]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"get_internal_squads() failed: {e!r}")
         return []
 
 
@@ -336,7 +354,8 @@ async def add_user_to_squad(user_uuid: str, squad_uuid: str) -> bool:
             json={"userUuids": [user_uuid]},
         )
         return resp.json().get("response", {}).get("eventSent", False)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"add_user_to_squad({user_uuid}, {squad_uuid}) failed: {e!r}")
         return False
 
 
@@ -369,7 +388,8 @@ async def get_user_devices(user_uuid: str) -> list[HwidDevice]:
             )
             for d in devices
         ]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"get_user_devices({user_uuid}) failed: {e!r}")
         return []
 
 
@@ -381,7 +401,8 @@ async def delete_user_device(user_uuid: str, hwid: str) -> bool:
             json={"userUuid": user_uuid, "hwid": hwid},
         )
         return resp.status_code == 200
-    except Exception:
+    except Exception as e:
+        logger.warning(f"delete_user_device({user_uuid}, {hwid}) failed: {e!r}")
         return False
 
 
@@ -393,7 +414,8 @@ async def delete_all_user_devices(user_uuid: str) -> bool:
             json={"userUuid": user_uuid},
         )
         return resp.status_code == 200
-    except Exception:
+    except Exception as e:
+        logger.warning(f"delete_all_user_devices({user_uuid}) failed: {e!r}")
         return False
 
 
@@ -411,7 +433,8 @@ async def get_nodes() -> list[NodeInfo]:
             )
             for n in resp.json().get("response", [])
         ]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"get_nodes() failed: {e!r}")
         return []
 
 
@@ -421,7 +444,8 @@ async def restart_node(node_uuid: str) -> bool:
             _url(f"/nodes/{node_uuid}/restart"), headers=_headers()
         )
         return resp.status_code in (200, 201)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"restart_node({node_uuid}) failed: {e!r}")
         return False
 
 
@@ -433,6 +457,7 @@ async def get_inbounds() -> list[InboundInfo]:
             _url("/config-profiles/inbounds"), headers=_headers()
         )
         if resp.status_code != 200:
+            logger.warning(f"get_inbounds() got status {resp.status_code}: {resp.text[:200]}")
             return []
         raw = resp.json().get("response", {})
         items = raw.get("inbounds", []) if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
@@ -445,7 +470,8 @@ async def get_inbounds() -> list[InboundInfo]:
             )
             for i in items
         ]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"get_inbounds() failed: {e!r}")
         return []
 
 
@@ -453,6 +479,7 @@ async def get_hosts() -> list[HostInfo]:
     try:
         resp = await _get_client().get(_url("/hosts"), headers=_headers())
         if resp.status_code != 200:
+            logger.warning(f"get_hosts() got status {resp.status_code}: {resp.text[:200]}")
             return []
         raw = resp.json().get("response", [])
         if not isinstance(raw, list):
@@ -468,5 +495,6 @@ async def get_hosts() -> list[HostInfo]:
             )
             for h in raw
         ]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"get_hosts() failed: {e!r}")
         return []
