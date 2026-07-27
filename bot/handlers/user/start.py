@@ -543,6 +543,8 @@ async def revoke_mtproxy(callback: CallbackQuery, session: AsyncSession):
     # Генерируем новый секрет
     new_secret = telemt_svc.generate_secret()
     
+    # Сначала удаляем старого пользователя, чтобы telemt принял новый секрет
+    await telemt_svc.remove_user(user.remnawave_username)
     # Обновляем в telemt API
     try:
         await telemt_svc.add_user(user.remnawave_username, new_secret, max_ips=max_ips)
