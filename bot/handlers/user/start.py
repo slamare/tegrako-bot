@@ -58,7 +58,7 @@ async def _get_menu_kb(session, tg_id: int, remnawave_uuid: str | None) -> Inlin
             if has_secret:
                 rw = await remnawave.get_subscription_info(remnawave_uuid)
                 show_proxy = _has_active_proxy_access(rw)
-                logger.debug(f"proxy check tg={tg_id} status={rw.status.value if rw else None} expire={rw.expire_at if rw else None} show={show_proxy}")
+                logger.warning(f"proxy check tg={tg_id} status={rw.status.value if rw else None} expire={rw.expire_at if rw else None} has_secret={has_secret} show={show_proxy}")
         except Exception as e:
             logger.warning(f"proxy check failed tg={tg_id}: {e}")
     return main_menu_kb(is_admin=is_adm, show_proxy=show_proxy)
