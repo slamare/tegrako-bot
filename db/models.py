@@ -142,6 +142,29 @@ class Notification(Base):
     )
 
 
+class TorrentBlockLog(Base):
+    __tablename__ = "torrent_block_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    username: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    node_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    destination: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+class NodeCheck(Base):
+    __tablename__ = "node_checks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    node_uuid: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    node_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    is_up: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
 class CustomMenuButton(Base):
     """Дополнительные кнопки главного меню, настраиваемые из админки."""
     __tablename__ = "custom_menu_buttons"

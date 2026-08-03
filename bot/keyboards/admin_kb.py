@@ -13,6 +13,7 @@ def admin_menu_kb(maintenance_on: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📦 Тарифы", callback_data="admin_tariffs")],
         [InlineKeyboardButton(text="🎟 Промокоды", callback_data="admin_promos")],
         [InlineKeyboardButton(text="📡 Ноды", callback_data="admin_nodes")],
+        [InlineKeyboardButton(text="🧲 Торрент-блоки", callback_data="admin_torrent_blocks")],
         [InlineKeyboardButton(text="🔌 Инбаунды / Хосты", callback_data="admin_inbounds")],
         [InlineKeyboardButton(text="🔐 Режим доступа", callback_data="admin_access_mode")],
         [InlineKeyboardButton(text="🔘 Кнопки меню", callback_data="admin_custom_buttons")],

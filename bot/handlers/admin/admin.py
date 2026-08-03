@@ -883,7 +883,7 @@ async def admin_nodes(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("node:"))
-async def view_node(callback: CallbackQuery):
+async def view_node(callback: CallbackQuery, session: AsyncSession):
     node_uuid = callback.data.split(":", 1)[1]
     nodes = await remnawave.get_nodes()
     node = next((n for n in nodes if str(n.uuid) == node_uuid), None)
@@ -891,9 +891,14 @@ async def view_node(callback: CallbackQuery):
         await callback.answer("Нода не найдена", show_alert=True)
         return
     status = "🟢 Онлайн" if node.is_connected else "🔴 Офлайн"
+    uptime = await dal.get_node_uptime(session, node_uuid)
+    latency = await dal.get_node_avg_latency(session, node_uuid)
+    check_info = f"\n📈 Аптайм 24ч: {uptime}%" if uptime is not None else "\n📈 Аптайм 24ч: нет данных"
+    if latency is not None:
+        check_info += f" | ⚡ {latency} мс"
     await edit_or_answer(
         callback,
-        f"📡 <b>{node.name}</b>\n\nСтатус: {status}\nАдрес: {node.address}\nUUID: <code>{node_uuid}</code>",
+        f"📡 <b>{node.name}</b>\n\nСтатус: {status}\nАдрес: {node.address}\nUUID: <code>{node_uuid}</code>{check_info}",
         reply_markup=node_manage_kb(node_uuid),
     )
 
@@ -902,6 +907,21 @@ async def view_node(callback: CallbackQuery):
 async def restart_node(callback: CallbackQuery):
     ok = await remnawave.restart_node(callback.data.split(":", 1)[1])
     await callback.answer("🔄 Нода перезагружается..." if ok else "❌ Ошибка перезагрузки", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_torrent_blocks")
+async def admin_torrent_blocks(callback: CallbackQuery, session: AsyncSession):
+    blocks = await dal.get_recent_torrent_blocks(session)
+    if not blocks:
+        await edit_or_answer(callback, "✅ Блокировок не было.", reply_markup=admin_nav_kb())
+        return
+    lines = ["🧲 <b>Последние торрент-блоки:</b>\n"]
+    for b in blocks:
+        date_str = b.created_at.strftime("%d.%m %H:%M")
+        lines.append(
+            f"{date_str} — <code>{b.username or '—'}</code> | {b.ip or '—'} | {b.node_name or '—'}"
+        )
+    await edit_or_answer(callback, "\n".join(lines), reply_markup=admin_nav_kb())
 
 
 # ── Тех. работы ───────────────────────────────────────────────────────────────

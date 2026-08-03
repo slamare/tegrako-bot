@@ -13,6 +13,7 @@ from bot.handlers.user import start, payment, support, mtproto
 from bot.handlers.admin import admin
 from bot.handlers.webhook import create_webhook_app
 from bot.services.scheduler import scheduler
+from bot.services.node_checker import node_checker_loop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ async def main():
     logger.info(f"Webhook server on port {settings.WEBHOOK_PORT}")
 
     asyncio.create_task(scheduler(bot))
+    asyncio.create_task(node_checker_loop())
     logger.info("Bot started")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 

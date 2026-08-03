@@ -172,11 +172,19 @@ async def _handle_torrent_blocker(bot: Bot, event: str, data: dict):
     if event != "torrent_blocker.report":
         return
     user_data = data.get("userData", {})
+    action = data.get("actionReport", {})
+    xray = data.get("xrayReport", {})
+    node = data.get("nodeData", {})
     tg_id = user_data.get("telegramId")
-    if not tg_id:
-        return
+
     from db.database import async_session_maker
     async with async_session_maker() as session:
+        await dal.log_torrent_block(
+            session, tg_id, user_data.get("username"),
+            action.get("blockedIp"), node.get("name"), xray.get("destination"),
+        )
+        if not tg_id:
+            return
         user = await dal.get_user(session, tg_id)
         if not user:
             return
@@ -235,6 +243,13 @@ async def _notify_admins(bot: Bot, scope: str, event: str, data: dict):
         user_data = data.get("userData", {})
         tg_id = user_data.get("telegramId")
         if tg_id:
+            from db.database import async_session_maker
+            async with async_session_maker() as session:
+                user = await dal.get_user(session, tg_id)
+                if user:
+                    count = await dal.count_torrent_blocks(session, user.id)
+                    if count > 1:
+                        text += f"\n\n🔁 Нарушений за 30 дней: <b>{count}</b>"
             rows.append([
                 InlineKeyboardButton(text="👤 Профиль", callback_data=f"admin_user:{tg_id}"),
                 InlineKeyboardButton(text="🚫 Забанить", callback_data=f"toggle_ban:{tg_id}"),

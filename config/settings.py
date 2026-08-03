@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     # Format: protocol://user:password@host:port, example: socks5://proxy:1080
     TELEGRAM_BOT_PROXY: Optional[str] = None
 
+    # Внешняя TCP-проверка доступности нод (независимо от статуса панели)
+    NODE_CHECK_INTERVAL_MINUTES: int = 5
+
     @property
     def admin_ids(self) -> list[int]:
         return [int(x.strip()) for x in self.ADMIN_IDS.split(",") if x.strip()]

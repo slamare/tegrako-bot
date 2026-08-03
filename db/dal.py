@@ -6,6 +6,7 @@ from sqlalchemy.orm import selectinload
 from db.models import (
     User, Tariff, Payment, SupportTicket, TicketMessage,
     BotSettings, Notification, PromoCode, CustomMenuButton,
+    TorrentBlockLog, NodeCheck,
 )
 
 
@@ -457,3 +458,69 @@ async def update_custom_button(session: AsyncSession, btn_id: int, **kwargs) -> 
 async def delete_custom_button(session: AsyncSession, btn_id: int) -> None:
     await session.execute(delete(CustomMenuButton).where(CustomMenuButton.id == btn_id))
     await session.commit()
+
+
+# ── Torrent blocks ─────────────────────────────────────────────────────────
+
+async def log_torrent_block(
+    session: AsyncSession, telegram_id: Optional[int], username: Optional[str],
+    ip: Optional[str], node_name: Optional[str], destination: Optional[str],
+) -> TorrentBlockLog:
+    user = await get_user(session, telegram_id) if telegram_id else None
+    entry = TorrentBlockLog(
+        user_id=user.id if user else None, username=username,
+        ip=ip, node_name=node_name, destination=destination,
+    )
+    session.add(entry)
+    await session.commit()
+    return entry
+
+
+async def count_torrent_blocks(session: AsyncSession, user_id: int, days: int = 30) -> int:
+    since = datetime.utcnow() - timedelta(days=days)
+    return await session.scalar(
+        select(func.count(TorrentBlockLog.id)).where(
+            TorrentBlockLog.user_id == user_id, TorrentBlockLog.created_at >= since
+        )
+    ) or 0
+
+
+async def get_recent_torrent_blocks(session: AsyncSession, limit: int = 20) -> list[TorrentBlockLog]:
+    result = await session.execute(
+        select(TorrentBlockLog).order_by(TorrentBlockLog.created_at.desc()).limit(limit)
+    )
+    return result.scalars().all()
+
+
+# ── Node checks ────────────────────────────────────────────────────────────
+
+async def log_node_check(
+    session: AsyncSession, node_uuid: str, node_name: str, is_up: bool, latency_ms: Optional[int] = None
+) -> None:
+    session.add(NodeCheck(node_uuid=node_uuid, node_name=node_name, is_up=is_up, latency_ms=latency_ms))
+    await session.commit()
+
+
+async def get_node_uptime(session: AsyncSession, node_uuid: str, hours: int = 24) -> Optional[float]:
+    since = datetime.utcnow() - timedelta(hours=hours)
+    total = await session.scalar(
+        select(func.count(NodeCheck.id)).where(NodeCheck.node_uuid == node_uuid, NodeCheck.checked_at >= since)
+    ) or 0
+    if not total:
+        return None
+    up = await session.scalar(
+        select(func.count(NodeCheck.id)).where(
+            NodeCheck.node_uuid == node_uuid, NodeCheck.checked_at >= since, NodeCheck.is_up == True
+        )
+    ) or 0
+    return round(up / total * 100, 1)
+
+
+async def get_node_avg_latency(session: AsyncSession, node_uuid: str, hours: int = 24) -> Optional[int]:
+    since = datetime.utcnow() - timedelta(hours=hours)
+    avg = await session.scalar(
+        select(func.avg(NodeCheck.latency_ms)).where(
+            NodeCheck.node_uuid == node_uuid, NodeCheck.checked_at >= since, NodeCheck.is_up == True
+        )
+    )
+    return int(avg) if avg is not None else None
