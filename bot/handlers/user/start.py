@@ -15,6 +15,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from bot.states.states import RegistrationSG, SupportSG
+from bot.keyboards.admin_kb import ticket_reply_kb
 from bot.keyboards.user_kb import (
     main_menu_kb, back_kb, nav_kb, profile_kb, proxy_kb,
     devices_kb, subscription_detail_kb, cancel_kb, remove_kb,
@@ -574,10 +575,19 @@ async def menu_support(callback: CallbackQuery, session: AsyncSession, state: FS
         return
     await state.set_state(SupportSG.waiting_message)
 
-    msg = await edit_or_answer(callback,
+    open_ticket = await dal.get_open_ticket(session, user.id)
+    text = (
+        f"💬 <b>Поддержка</b>\n\n"
+        f"У вас уже открыт тикет #{open_ticket.id}.\n"
+        f"Напишите сообщение — оно добавится в этот тикет."
+        if open_ticket else
         f"💬 <b>Поддержка</b>\n\n"
         f"Напишите ваш вопрос — ответим как можно скорее.\n\n"
-        f"Тикет будет создан автоматически после вашего первого сообщения.",
+        f"Тикет будет создан автоматически после вашего первого сообщения."
+    )
+
+    msg = await edit_or_answer(callback,
+        text,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=" Меню", callback_data="main_menu")],
@@ -614,6 +624,7 @@ async def support_message(message: Message, session: AsyncSession, state: FSMCon
                     f"🆔 <code>{user.remnawave_username or '—'}</code>\n\n"
                     f"💬 <b>Сообщение:</b>\n{message.text}",
                     parse_mode="HTML",
+                    reply_markup=ticket_reply_kb(ticket.id),
                 )
             except Exception:
                 pass

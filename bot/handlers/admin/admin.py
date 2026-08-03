@@ -486,7 +486,20 @@ async def close_ticket(callback: CallbackQuery, session: AsyncSession):
         )
     except Exception:
         pass
-    await _mark_payment(callback.message, approved=True)
+    try:
+        suffix = "\n\n🔒 <b>ЗАКРЫТ</b>"
+        if callback.message.photo:
+            await callback.message.edit_caption(
+                caption=(callback.message.caption or "") + suffix, parse_mode="HTML",
+                reply_markup=ticket_reply_kb(ticket_id, is_closed=True),
+            )
+        else:
+            await callback.message.edit_text(
+                (callback.message.text or "") + suffix, parse_mode="HTML",
+                reply_markup=ticket_reply_kb(ticket_id, is_closed=True),
+            )
+    except Exception:
+        pass
     await callback.answer("Закрыт")
 
 
