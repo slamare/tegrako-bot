@@ -8,7 +8,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from config.settings import settings
 from db.database import init_db, create_tables
-from bot.middlewares.middlewares import DatabaseMiddleware, BanCheckMiddleware
+from bot.middlewares.middlewares import DatabaseMiddleware, BanCheckMiddleware, ThrottlingMiddleware
 from bot.handlers.user import start, payment, support, mtproto
 from bot.handlers.admin import admin
 from bot.handlers.webhook import create_webhook_app
@@ -38,10 +38,13 @@ async def main():
     bot = _make_bot()
     dp = Dispatcher(storage=MemoryStorage())
 
+    throttling = ThrottlingMiddleware(interval=0.4)
+    dp.message.middleware(throttling)
+    dp.callback_query.middleware(throttling)
+
     for mw in (DatabaseMiddleware(), BanCheckMiddleware()):
         dp.message.middleware(mw)
         dp.callback_query.middleware(mw)
-    dp.message.middleware(DatabaseMiddleware())
     dp.inline_query.middleware(DatabaseMiddleware())
     dp.inline_query.middleware(BanCheckMiddleware())
 

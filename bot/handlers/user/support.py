@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -7,12 +8,14 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.keyboards.admin_kb import ticket_reply_kb
+from bot.services.notifications import notify_admins
 from bot.states.states import SupportSG
 from bot.utils.helpers import delete_later
 from config.settings import settings
 from db import dal
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 _BANNED_IN_SUPPORT = F.sticker | F.animation | F.video_note | F.voice
 
@@ -23,15 +26,9 @@ async def close_ticket_cmd(message: Message, session: AsyncSession, state: FSMCo
     ticket_id = data.get("ticket_id")
     if ticket_id:
         await dal.close_ticket(session, ticket_id)
-        for admin_id in settings.admin_ids:
-            try:
-                await message.bot.send_message(
-                    admin_id,
-                    f"🔒 Тикет #{ticket_id} закрыт пользователем.",
-                    disable_notification=True,
-                )
-            except Exception:
-                pass
+        await notify_admins(
+            message.bot, f"🔒 Тикет #{ticket_id} закрыт пользователем.", disable_notification=True,
+        )
     await state.clear()
     try:
         await message.delete()
@@ -122,8 +119,8 @@ async def user_support_message(message: Message, session: AsyncSession, state: F
                 "👆 Сообщение от пользователя:",
                 reply_markup=ticket_reply_kb(ticket_id),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Ticket forward to admin {admin_id} failed: {e}")
 
     msg = await message.answer(
         "✅ Отправлено.",

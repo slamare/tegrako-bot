@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 from bot.states.states import RegistrationSG, SupportSG
 from bot.keyboards.admin_kb import ticket_reply_kb
+from bot.services.notifications import notify_admins
 from bot.keyboards.user_kb import (
     main_menu_kb, back_kb, nav_kb, profile_kb, proxy_kb,
     devices_kb, subscription_detail_kb, cancel_kb, remove_kb,
@@ -615,19 +616,14 @@ async def support_message(message: Message, session: AsyncSession, state: FSMCon
     await state.update_data(ticket_id=ticket.id)
 
     if is_new_ticket:
-        for admin_id in settings.admin_ids:
-            try:
-                await message.bot.send_message(
-                    admin_id,
-                    f"🎫 <b>Новый тикет #{ticket.id}</b>\n\n"
-                    f"👤 @{user.username or '—'} (<code>{user.telegram_id}</code>)\n"
-                    f"🆔 <code>{user.remnawave_username or '—'}</code>\n\n"
-                    f"💬 <b>Сообщение:</b>\n{message.text}",
-                    parse_mode="HTML",
-                    reply_markup=ticket_reply_kb(ticket.id),
-                )
-            except Exception:
-                pass
+        await notify_admins(
+            message.bot,
+            f"🎫 <b>Новый тикет #{ticket.id}</b>\n\n"
+            f"👤 @{user.username or '—'} (<code>{user.telegram_id}</code>)\n"
+            f"🆔 <code>{user.remnawave_username or '—'}</code>\n\n"
+            f"💬 <b>Сообщение:</b>\n{message.text}",
+            reply_markup=ticket_reply_kb(ticket.id),
+        )
 
     await cleanup_fsm_interaction(message, state)
 
@@ -657,11 +653,7 @@ async def close_my_ticket(callback: CallbackQuery, session: AsyncSession, state:
 
     if ticket_id:
         await dal.close_ticket(session, ticket_id)
-        for admin_id in settings.admin_ids:
-            try:
-                await callback.bot.send_message(admin_id, f"🔒 Тикет #{ticket_id} закрыт пользователем.")
-            except Exception:
-                pass
+        await notify_admins(callback.bot, f"🔒 Тикет #{ticket_id} закрыт пользователем.")
     await state.clear()
     await callback.answer("✅ Тикет закрыт")
 

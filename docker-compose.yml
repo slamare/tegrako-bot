@@ -32,6 +32,25 @@ services:
       retries: 5
     networks:
       - internal
+  backup:
+    image: postgres:17-alpine
+    container_name: tegrakobot-backup
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    environment:
+      POSTGRES_DB: tegrakobot
+      POSTGRES_USER: tegrakobot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-21600}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - ./deploy/backup.sh:/backup.sh:ro
+      - ./backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
 volumes:
   tegrakobot-db-data:
     name: tegrakobot-db-data

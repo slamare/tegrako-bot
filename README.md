@@ -172,7 +172,21 @@ WEBHOOK_URL=http://tegrakobot:9090/webhook
 WEBHOOK_SECRET_HEADER=<тот же секрет что в WEBHOOK_SECRET бота>
 ```
 
-Обрабатываемые события: `user.expired`, `user.limited`, `user.disabled`, `user.expires_in_24/48/72_hours`.
+Обрабатываемые события: `user.expired`, `user.limited`, `user.disabled`, `user.expires_in_24/48/72_hours`, `torrent_blocker.report`.
+
+Проверка живости: `GET /health` → `{"status": "ok"}`.
+
+---
+
+## Бэкапы БД
+
+Контейнер `tegrakobot-backup` каждые `BACKUP_INTERVAL_SECONDS` (по умолчанию 6ч) снимает `pg_dump` в `./backups/`, хранит `BACKUP_RETENTION_DAYS` дней (по умолчанию 14). Папка вне docker-volume — стоит рутинно синкать её (`rsync`/`restic`) на другой диск или хост, т.к. сама по себе она не защищает от потери диска CT102.
+
+Восстановление:
+
+```bash
+gunzip -c backups/tegrakobot_YYYYMMDD_HHMMSS.sql.gz | docker exec -i tegrakobot-db psql -U tegrakobot tegrakobot
+```
 
 ---
 

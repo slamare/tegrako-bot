@@ -392,8 +392,13 @@ def _expired_text(event: str) -> str:
     return "⚠️ <b>Ваша подписка истекла.</b>\n\nОформите новую — нажмите «🛒 Купить подписку»."
 
 
+async def handle_health(request: web.Request) -> web.Response:
+    return web.json_response({"status": "ok"})
+
+
 def create_webhook_app(bot: Bot) -> web.Application:
     app = web.Application()
     app["bot"] = bot
     app.router.add_post("/webhook", handle_webhook)
+    app.router.add_get("/health", handle_health)
     return app

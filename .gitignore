@@ -26,6 +26,7 @@ env/
 
 # Docker volumes
 postgres_data/
+backups/
 
 # OS
 .DS_Store

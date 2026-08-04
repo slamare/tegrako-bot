@@ -1,6 +1,8 @@
+import time
 from typing import Callable, Any
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Message, CallbackQuery
+from config.settings import settings
 from db import dal
 
 
@@ -29,5 +31,34 @@ class BanCheckMiddleware(BaseMiddleware):
             elif isinstance(event, CallbackQuery):
                 await event.answer("🚫 Ваш аккаунт заблокирован.", show_alert=True)
             return
+
+        return await handler(event, data)
+
+
+class ThrottlingMiddleware(BaseMiddleware):
+    """Простой троттлинг: не чаще одного апдейта на interval секунд на пользователя.
+
+    Callback-запросы всегда тихо подтверждаются (answer), чтобы у клиента не крутились часы.
+    """
+
+    def __init__(self, interval: float = 0.5):
+        self.interval = interval
+        self._last_seen: dict[int, float] = {}
+
+    async def __call__(self, handler: Callable, event: TelegramObject, data: dict) -> Any:
+        tg_user = getattr(event, "from_user", None)
+        if not tg_user or tg_user.id in settings.admin_ids:
+            return await handler(event, data)
+
+        now = time.monotonic()
+        last = self._last_seen.get(tg_user.id, 0.0)
+        if now - last < self.interval:
+            if isinstance(event, CallbackQuery):
+                try:
+                    await event.answer()
+                except Exception:
+                    pass
+            return
+        self._last_seen[tg_user.id] = now
 
         return await handler(event, data)
