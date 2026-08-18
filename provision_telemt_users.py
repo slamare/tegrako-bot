@@ -50,7 +50,7 @@ async def run():
             if user.mtproto_secret:
                 try:
                     # Обновляем лимит IP даже если пользователь уже есть
-                    telemt.add_user(user.remnawave_username, user.mtproto_secret, max_ips=max_ips)
+                    await telemt.add_user(user.remnawave_username, user.mtproto_secret, max_ips=max_ips)
                     print(f"  \u23ed\ufe0f  Updated {user.remnawave_username} (max_ips={max_ips})")
                 except Exception as e:
                     print(f"  \u274c Config error for {user.remnawave_username}: {e}")
@@ -59,7 +59,7 @@ async def run():
 
             try:
                 secret = telemt.generate_secret()
-                telemt.add_user(user.remnawave_username, secret, max_ips=max_ips)
+                await telemt.add_user(user.remnawave_username, secret, max_ips=max_ips)
                 await session.execute(
                     update(User)
                     .where(User.telegram_id == user.telegram_id)
