@@ -22,7 +22,7 @@ services:
     environment:
       POSTGRES_DB: tegrakobot
       POSTGRES_USER: tegrakobot
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
       - tegrakobot-db-data:/var/lib/postgresql/data
     healthcheck:
@@ -40,7 +40,7 @@ services:
     environment:
       POSTGRES_DB: tegrakobot
       POSTGRES_USER: tegrakobot
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-21600}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
     volumes:

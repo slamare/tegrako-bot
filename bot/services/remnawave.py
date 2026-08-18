@@ -27,6 +27,13 @@ def _get_client() -> httpx.AsyncClient:
     return _client
 
 
+async def close_client() -> None:
+    global _client
+    if _client is not None and not _client.is_closed:
+        await _client.aclose()
+    _client = None
+
+
 def _headers() -> dict:
     return {"Authorization": f"Bearer {settings.PANEL_API_KEY}"}
 
@@ -164,6 +171,8 @@ async def get_user_by_uuid(uuid: str) -> Optional[UserInfo]:
 
 
 async def get_user_by_telegram_id(telegram_id: int) -> Optional[UserInfo]:
+    # Migration fallback: только для первого /start пользователя без remnawave_uuid в БД.
+    # Не вызывать регулярно и не в цикле — грузит /users?limit=1000 целиком.
     try:
         resp = await _get_client().get(
             _url("/users?limit=1000"), headers=_headers(), timeout=15
@@ -219,7 +228,7 @@ async def _patch_user(payload: dict) -> Optional[UserInfo]:
         invalidate_sub_info_cache(payload.get("uuid"))
         return result
     except Exception as e:
-        logger.warning(f"_patch_user({payload}) failed: {e!r}")
+        logger.warning(f"_patch_user uuid={payload.get('uuid')} fields={list(payload.keys())} failed: {e!r}")
         return None
 
 

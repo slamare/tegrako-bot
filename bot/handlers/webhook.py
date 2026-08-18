@@ -45,10 +45,8 @@ ADMIN_NOTIFY_EVENTS = {
 }
 
 
-def _verify_signature(secret: str, body: dict, signature: str) -> bool:
-    # Панель подписывает json.dumps(body) с separators=(',', ':')
-    body_str = json.dumps(body, separators=(",", ":"))
-    expected = hmac.new(secret.encode(), body_str.encode("utf-8"), hashlib.sha256).hexdigest()
+def _verify_signature(secret: str, raw_body: bytes, signature: str) -> bool:
+    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
 
 
@@ -65,7 +63,7 @@ async def handle_webhook(request: web.Request) -> web.Response:
         if not signature:
             logger.warning(f"Webhook: missing signature from {request.remote}")
             return web.Response(status=403, text="Missing signature")
-        if not _verify_signature(settings.WEBHOOK_SECRET, payload, signature):
+        if not _verify_signature(settings.WEBHOOK_SECRET, raw_body, signature):
             logger.warning(f"Webhook: invalid signature from {request.remote}")
             return web.Response(status=403, text="Invalid signature")
 
@@ -91,6 +89,7 @@ async def handle_webhook(request: web.Request) -> web.Response:
             logger.debug(f"Webhook: unhandled event={event} scope={scope}")
     except Exception as e:
         logger.error(f"Webhook handler error: {e}", exc_info=True)
+        return web.Response(status=500, text="Internal error")
 
     return web.Response(status=200)
 

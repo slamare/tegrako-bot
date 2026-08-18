@@ -24,20 +24,43 @@ async def _tcp_check(host: str, port: int, timeout: float = 5.0) -> tuple[bool, 
 
 
 def _split_address(address: str) -> tuple[str, int]:
+    address = address.strip()
+    if address.startswith("["):
+        host, _, rest = address[1:].partition("]")
+        if rest.startswith(":") and rest[1:].isdigit():
+            return host, int(rest[1:])
+        return host, 443
+    if address.count(":") > 1:
+        return address, 443
     host, _, port_str = address.rpartition(":")
     if host and port_str.isdigit():
         return host, int(port_str)
     return address, 443
 
 
+async def _check_one(node, semaphore: asyncio.Semaphore):
+    async with semaphore:
+        host, port = _split_address(node.address)
+        is_up, latency = await _tcp_check(host, port)
+        return node, is_up, latency
+
+
 async def check_nodes_once():
     from db.database import async_session_maker
 
     nodes = await remnawave.get_nodes()
+    semaphore = asyncio.Semaphore(10)
+    results = await asyncio.gather(
+        *[_check_one(node, semaphore) for node in nodes],
+        return_exceptions=True,
+    )
+
     async with async_session_maker() as session:
-        for node in nodes:
-            host, port = _split_address(node.address)
-            is_up, latency = await _tcp_check(host, port)
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"Node check failed: {result!r}")
+                continue
+            node, is_up, latency = result
             await dal.log_node_check(session, node.uuid, node.name, is_up, latency)
 
 
