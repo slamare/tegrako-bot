@@ -13,7 +13,6 @@ def main_menu_kb(is_admin: bool = False, has_sub: bool = False, show_proxy: bool
     builder.button(text="🛒 Купить подписку", callback_data="menu_buy")
     builder.button(text="💬 Поддержка", callback_data="menu_support")
     builder.button(text="👥 Пригласить друга", callback_data="menu_invite")
-    
     if show_proxy:
         builder.button(text="📡 Proxy для Telegram", callback_data="menu_proxy")
     
@@ -67,10 +66,12 @@ def cancel_kb(back_cb: str = "main_menu") -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="❌ Отмена", callback_data=back_cb)]
     ])
 
-def profile_kb(has_subscription: bool = True) -> InlineKeyboardMarkup:
+def profile_kb(has_subscription: bool = True, sub_url: str | None = None) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if has_subscription:
-        builder.button(text="📋 Моя подписка", callback_data="my_subscription")
+        if sub_url:
+            builder.button(text="🔗 Открыть подписку", url=sub_url)
+        builder.button(text="🔄 Сбросить ссылку", callback_data="revoke_subscription")
         builder.button(text="📱 Мои устройства", callback_data="my_devices")
         builder.button(text="💳 История платежей", callback_data="payment_history")
         builder.button(text="🏠 Меню", callback_data="main_menu")
@@ -98,13 +99,5 @@ def proxy_kb(proxy_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔗 Подключить прокси", url=proxy_url)],
         [InlineKeyboardButton(text="🔄 Перевыпустить ссылку", callback_data="revoke_mtproxy")],
-        [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
-    ])
-
-def subscription_detail_kb(sub_url: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔗 Открыть подписку", url=sub_url)],
-        [InlineKeyboardButton(text="🔄 Сбросить ссылку", callback_data="revoke_subscription")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="menu_profile")],
         [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
     ])

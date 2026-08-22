@@ -19,7 +19,7 @@ from bot.keyboards.admin_kb import ticket_reply_kb
 from bot.services.notifications import notify_admins
 from bot.keyboards.user_kb import (
     main_menu_kb, back_kb, nav_kb, profile_kb, proxy_kb,
-    devices_kb, subscription_detail_kb, cancel_kb, remove_kb,
+    devices_kb, cancel_kb, remove_kb,
 )
 from bot.services import remnawave
 from bot.utils.helpers import (
@@ -50,26 +50,44 @@ def _has_active_proxy_access(rw) -> bool:
     return False
 
 
-async def _get_menu_kb(session, tg_id: int, remnawave_uuid: str | None) -> InlineKeyboardMarkup:
+def _sub_status_line(rw) -> str:
+    if not rw:
+        return ""
+    now = datetime.now(timezone.utc)
+    days_left = (rw.expire_at - now).days
+    used_gb = round(rw.user_traffic.used_traffic_bytes / 1024 ** 3, 1)
+    limit_gb = round(rw.traffic_limit_bytes / 1024 ** 3, 1) if rw.traffic_limit_bytes else None
+    traffic = f"{used_gb}/{limit_gb} ГБ" if limit_gb else f"{used_gb} ГБ"
+    if rw.status.value == "ACTIVE":
+        return f"\n\n🟢 Подписка активна · {days_left} дн. · {traffic}"
+    if rw.status.value == "EXPIRED":
+        return "\n\n🔴 Подписка истекла"
+    return f"\n\n⚪ Статус подписки: {rw.status.value}"
+
+
+async def _get_menu_context(session, tg_id: int, remnawave_uuid: str | None) -> tuple[InlineKeyboardMarkup, str]:
     is_adm = tg_id in settings.admin_ids
     show_proxy = False
+    status_line = ""
     if remnawave_uuid:
         try:
+            rw = await remnawave.get_subscription_info(remnawave_uuid)
+            status_line = _sub_status_line(rw)
             user = await dal.get_user(session, tg_id)
             has_secret = bool(user and user.mtproto_secret)
             if has_secret:
-                rw = await remnawave.get_subscription_info(remnawave_uuid)
                 show_proxy = _has_active_proxy_access(rw)
-                logger.warning(f"proxy check tg={tg_id} status={rw.status.value if rw else None} expire={rw.expire_at if rw else None} has_secret={has_secret} show={show_proxy}")
         except Exception as e:
-            logger.warning(f"proxy check failed tg={tg_id}: {e}")
-    return main_menu_kb(is_admin=is_adm, show_proxy=show_proxy)
+            logger.warning(f"menu context failed tg={tg_id}: {e}")
+    kb = main_menu_kb(is_admin=is_adm, show_proxy=show_proxy)
+    return kb, status_line
 
 
-def _welcome_text() -> str:
+def _welcome_text(status_line: str = "") -> str:
     return (
         f"👋 Главное меню\n\n"
-        f"<b>{settings.BOT_NAME}</b> - Сервис для защиты соединения и обеспечения приватности в сети.\n"
+        f"<b>{settings.BOT_NAME}</b> - Сервис для защиты соединения и обеспечения приватности в сети."
+        f"{status_line}\n\n"
         f"Выберите действие в меню ниже."
     )
 
@@ -136,8 +154,8 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
     if message.from_user.username and user.username != message.from_user.username:
         await dal.update_user(session, tg_id, username=message.from_user.username)
 
-    kb = await _get_menu_kb(session, tg_id, user.remnawave_uuid)
-    text = _welcome_text()
+    kb, status_line = await _get_menu_context(session, tg_id, user.remnawave_uuid)
+    text = _welcome_text(status_line)
     photo_url = settings.WELCOME_IMAGE_URL if settings.WELCOME_IMAGE_URL else None
 
     await show_menu_message(message, text, reply_markup=kb, photo_url=photo_url)
@@ -171,8 +189,8 @@ async def main_menu_cb(callback: CallbackQuery, session: AsyncSession, state: FS
     await state.clear()
     user = await dal.get_user(session, callback.from_user.id)
     uuid = user.remnawave_uuid if user else None
-    kb = await _get_menu_kb(session, callback.from_user.id, uuid)
-    text = _welcome_text()
+    kb, status_line = await _get_menu_context(session, callback.from_user.id, uuid)
+    text = _welcome_text(status_line)
     photo_url = settings.WELCOME_IMAGE_URL if settings.WELCOME_IMAGE_URL else None
     await show_menu_message(callback, text, reply_markup=kb, photo_url=photo_url)
 
@@ -267,21 +285,23 @@ async def _profile_text_and_kb(session, tg_id: int):
         return None, None
     has_sub = bool(user.remnawave_uuid)
     sub_info = ""
+    sub_url = None
     if has_sub:
         try:
             rw = await remnawave.get_subscription_info(user.remnawave_uuid)
             if rw:
+                sub_url = rw.subscription_url
                 now = datetime.now(timezone.utc)
                 days_left = (rw.expire_at - now).days
                 expire_str = rw.expire_at.strftime("%d.%m.%Y")
                 used_gb = round(rw.user_traffic.used_traffic_bytes / 1024 ** 3, 2)
                 limit_gb = round(rw.traffic_limit_bytes / 1024 ** 3, 1) if rw.traffic_limit_bytes else "∞"
-                s_emoji = {"ACTIVE": "🟢", "EXPIRED": "🔴", "DISABLED": ""}.get(rw.status.value, "⚪")
+                s_emoji = {"ACTIVE": "🟢", "EXPIRED": "🔴", "DISABLED": "⚫"}.get(rw.status.value, "⚪")
                 sub_info = (
                     f"\n\n<b>Подписка:</b>\n"
                     f"{s_emoji} Статус: {rw.status.value}\n"
                     f"📅 До: {expire_str} ({days_left} дн.)\n"
-                    f" Трафик: {used_gb} / {limit_gb} ГБ"
+                    f"📊 Трафик: {used_gb} / {limit_gb} ГБ"
                 )
         except Exception:
             sub_info = "\n\n⚠️ Не удалось получить данные подписки"
@@ -296,7 +316,7 @@ async def _profile_text_and_kb(session, tg_id: int):
         f"{sub_info}"
         f"\n\n👥 Рефералов: {ref_count} (оплатили: {len(ref_paid)})"
     )
-    return text, profile_kb(has_sub)
+    return text, profile_kb(has_sub, sub_url)
 
 
 @router.callback_query(F.data == "menu_profile")
@@ -310,30 +330,11 @@ async def menu_profile(callback: CallbackQuery, session: AsyncSession):
 
 # ── Подписка ──────────────────────────────────────────────────────────────────
 
-@router.callback_query(F.data == "my_subscription")
-async def my_subscription(callback: CallbackQuery, session: AsyncSession):
-    user = await dal.get_user(session, callback.from_user.id)
-    if not user or not user.remnawave_uuid:
-        await callback.answer("Подписка не найдена", show_alert=True)
-        return
-    rw = await remnawave.get_subscription_info(user.remnawave_uuid)
-    if not rw:
-        await callback.answer("Не удалось получить данные", show_alert=True)
-        return
-    await edit_or_answer(callback,
-        f" <b>Ваша подписка</b>\n\n"
-        f"Нажмите кнопку ниже чтобы открыть ссылку подключения.\n\n"
-        f"⚠️ <b>Сброс ссылки</b> — сгенерирует новую. Старая перестанет работать.",
-        parse_mode="HTML",
-        reply_markup=subscription_detail_kb(rw.subscription_url),
-    )
-
-
 @router.callback_query(F.data == "revoke_subscription")
 async def revoke_subscription_prompt(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да, сбросить", callback_data="revoke_subscription_confirm")],
-        [InlineKeyboardButton(text=" Отмена", callback_data="my_subscription")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_profile")],
     ])
     await edit_or_answer(callback,
         "⚠️ <b>Подтвердите сброс ссылки</b>\n\n"
@@ -659,9 +660,9 @@ async def close_my_ticket(callback: CallbackQuery, session: AsyncSession, state:
 
     user = await dal.get_user(session, callback.from_user.id)
     uuid = user.remnawave_uuid if user else None
-    kb = await _get_menu_kb(session, callback.from_user.id, uuid)
+    kb, status_line = await _get_menu_context(session, callback.from_user.id, uuid)
     photo_url = settings.WELCOME_IMAGE_URL if settings.WELCOME_IMAGE_URL else None
-    await show_menu_message(callback, _welcome_text(), reply_markup=kb, photo_url=photo_url)
+    await show_menu_message(callback, _welcome_text(status_line), reply_markup=kb, photo_url=photo_url)
 
 
 # ── Inline-режим ──────────────────────────────────────────────────────────────
@@ -801,6 +802,6 @@ async def cancel_action(callback: CallbackQuery, state: FSMContext, session: Asy
     await state.clear()
     user = await dal.get_user(session, callback.from_user.id)
     uuid = user.remnawave_uuid if user else None
-    kb = await _get_menu_kb(session, callback.from_user.id, uuid)
+    kb, status_line = await _get_menu_context(session, callback.from_user.id, uuid)
     photo_url = settings.WELCOME_IMAGE_URL if settings.WELCOME_IMAGE_URL else None
-    await show_menu_message(callback, _welcome_text(), reply_markup=kb, photo_url=photo_url)
+    await show_menu_message(callback, _welcome_text(status_line), reply_markup=kb, photo_url=photo_url)
