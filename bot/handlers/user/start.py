@@ -678,7 +678,7 @@ async def inline_invite(inline_query: InlineQuery):
         "— Тогда выключи и включи.\n\n"
         f"Надоел этот ритуал? 🙃\n\n"
         f"{settings.BOT_NAME} — VPN, который работает без шаманских обрядов.\n\n"
-        "💻 Несколько устройств\n🌐 Безлимитный трафик\n Быстрая скорость"
+        "💻 Несколько устройств\n🌐 Безлимитный трафик\n⚡️ Быстрая скорость"
     )
     result = InlineQueryResultArticle(
         id="invite",
