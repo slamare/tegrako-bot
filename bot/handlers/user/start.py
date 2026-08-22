@@ -146,7 +146,7 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
         return
 
     rw_user = await remnawave.get_user_by_telegram_id(tg_id)
-    if rw_user:
+    if rw_user and rw_user.username != f"user{tg_id}":
         await dal.update_user(
             session, tg_id,
             remnawave_username=rw_user.username,

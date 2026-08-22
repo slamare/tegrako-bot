@@ -115,7 +115,7 @@ def _parse_user(u: dict) -> UserInfo:
     expire_at = datetime.fromisoformat(u["expireAt"].replace("Z", "+00:00"))
     traffic = u.get("userTraffic") or {}
     return UserInfo(
-        uuid=u["uuid"],
+        uuid=str(u["id"]),
         username=u["username"],
         status=UserStatus(value=u.get("status", "UNKNOWN")),
         expire_at=expire_at,
@@ -171,28 +171,37 @@ async def get_user_by_uuid(uuid: str) -> Optional[UserInfo]:
 
 
 async def get_user_by_telegram_id(telegram_id: int) -> Optional[UserInfo]:
-    # Migration fallback: только для первого /start пользователя без remnawave_uuid в БД.
-    # Не вызывать регулярно и не в цикле — грузит /users?limit=1000 целиком.
     try:
         resp = await _get_client().get(
-            _url("/users?limit=1000"), headers=_headers(), timeout=15
+            _url("/users/stream"), headers=_headers(),
+            params={"telegramId": telegram_id, "size": 5}, timeout=15,
         )
         users = resp.json().get("response", {}).get("users", [])
-        u = next((x for x in users if x.get("telegramId") == telegram_id), None)
-        return _parse_user(u) if u else None
+        return _parse_user(users[0]) if users else None
     except Exception as e:
         logger.warning(f"get_user_by_telegram_id({telegram_id}) failed: {e!r}")
         return None
 
 
 async def get_all_users_bulk() -> list[UserInfo]:
-    """Один запрос — все пользователи. Используется в scheduler."""
+    """Все пользователи через users/stream с курсорной пагинацией. Используется в scheduler."""
     try:
-        resp = await _get_client().get(
-            _url("/users?limit=10000"), headers=_headers(), timeout=30
-        )
-        users = resp.json().get("response", {}).get("users", [])
-        return [_parse_user(u) for u in users]
+        result = []
+        cursor = None
+        while True:
+            params = {"size": 1000}
+            if cursor is not None:
+                params["cursor"] = cursor
+            resp = await _get_client().get(
+                _url("/users/stream"), headers=_headers(), params=params, timeout=30
+            )
+            data = resp.json().get("response", {})
+            users = data.get("users", [])
+            result.extend(_parse_user(u) for u in users)
+            cursor = data.get("nextCursor")
+            if not cursor or not users:
+                break
+        return result
     except Exception as e:
         logger.warning(f"get_all_users_bulk() failed: {e!r}")
         return []
@@ -221,31 +230,32 @@ async def create_user(
 
 async def _patch_user(payload: dict) -> Optional[UserInfo]:
     """Общий PATCH /api/users — используется всеми функциями изменения пользователя."""
+    user_id = payload.pop("uuid", None)
+    if user_id is not None:
+        payload["id"] = int(user_id)
     try:
         resp = await _get_client().patch(_url("/users"), headers=_headers(), json=payload)
         resp.raise_for_status()
         result = _parse_user(resp.json().get("response", resp.json()))
-        invalidate_sub_info_cache(payload.get("uuid"))
+        invalidate_sub_info_cache(str(payload.get("id")))
         return result
     except Exception as e:
-        logger.warning(f"_patch_user uuid={payload.get('uuid')} fields={list(payload.keys())} failed: {e!r}")
+        logger.warning(f"_patch_user id={payload.get('id')} fields={list(payload.keys())} failed: {e!r}")
         return None
 
 
 async def extend_subscription(uuid: str, duration_days: int) -> UserInfo:
-    user = await get_user_by_uuid(uuid)
-    if not user:
-        raise ValueError(f"User {uuid} not found")
-    now = datetime.now(timezone.utc)
-    base = user.expire_at if user.expire_at > now else now
-    result = await _patch_user({
-        "uuid": uuid,
-        "expireAt": (base + timedelta(days=duration_days)).isoformat(),
-        "status": "ACTIVE",
-    })
-    if result is None:
-        raise RuntimeError(f"Failed to extend subscription for {uuid}")
-    return result
+    try:
+        resp = await _get_client().post(
+            _url(f"/users/{uuid}/actions/extend"), headers=_headers(), json={"days": duration_days}
+        )
+        resp.raise_for_status()
+        result = _parse_user(resp.json().get("response", resp.json()))
+        invalidate_sub_info_cache(uuid)
+        return result
+    except Exception as e:
+        logger.warning(f"extend_subscription({uuid}) failed: {e!r}")
+        raise RuntimeError(f"Failed to extend subscription for {uuid}") from e
 
 
 async def set_expire_at(uuid: str, expire_at: datetime) -> Optional[UserInfo]:
@@ -292,7 +302,7 @@ async def reset_user_traffic(uuid: str) -> bool:
         resp = await _get_client().post(
             _url(f"/users/{uuid}/actions/reset-traffic"), headers=_headers()
         )
-        ok = resp.status_code in (200, 201)
+        ok = resp.status_code in (200, 201, 204)
         if ok:
             invalidate_sub_info_cache(uuid)
         else:
@@ -358,11 +368,11 @@ async def get_internal_squads() -> list[SquadInfo]:
 async def add_user_to_squad(user_uuid: str, squad_uuid: str) -> bool:
     try:
         resp = await _get_client().post(
-            _url(f"/internal-squads/{squad_uuid}/bulk-actions/add-users"),
+            _url(f"/internal-squads/{squad_uuid}/bulk-actions/add-many-users"),
             headers=_headers(),
-            json={"userUuids": [user_uuid]},
+            json={"userIds": [int(user_uuid)]},
         )
-        return resp.json().get("response", {}).get("eventSent", False)
+        return resp.status_code in (200, 202, 204)
     except Exception as e:
         logger.warning(f"add_user_to_squad({user_uuid}, {squad_uuid}) failed: {e!r}")
         return False
@@ -388,7 +398,7 @@ async def get_user_devices(user_uuid: str) -> list[HwidDevice]:
         return [
             HwidDevice(
                 hwid=d["hwid"],
-                user_uuid=d["userUuid"],
+                user_uuid=str(d.get("userId", d.get("userUuid", user_uuid))),
                 platform=d.get("platform"),
                 os_version=d.get("osVersion"),
                 device_model=d.get("deviceModel"),
@@ -407,9 +417,9 @@ async def delete_user_device(user_uuid: str, hwid: str) -> bool:
         resp = await _get_client().post(
             _url("/hwid/devices/delete"),
             headers=_headers(),
-            json={"userUuid": user_uuid, "hwid": hwid},
+            json={"userId": int(user_uuid), "hwid": hwid},
         )
-        return resp.status_code == 200
+        return resp.status_code in (200, 204)
     except Exception as e:
         logger.warning(f"delete_user_device({user_uuid}, {hwid}) failed: {e!r}")
         return False
@@ -420,9 +430,9 @@ async def delete_all_user_devices(user_uuid: str) -> bool:
         resp = await _get_client().post(
             _url("/hwid/devices/delete-all"),
             headers=_headers(),
-            json={"userUuid": user_uuid},
+            json={"userId": int(user_uuid)},
         )
-        return resp.status_code == 200
+        return resp.status_code in (200, 204)
     except Exception as e:
         logger.warning(f"delete_all_user_devices({user_uuid}) failed: {e!r}")
         return False

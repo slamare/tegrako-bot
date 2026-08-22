@@ -16,7 +16,7 @@ def _headers():
 async def get_all_panel_users() -> list[dict]:
     async with httpx.AsyncClient(verify=True) as client:
         resp = await client.get(
-            f"{settings.PANEL_API_URL}/api/users?limit=1000",
+            f"{settings.PANEL_API_URL}/api/users?size=1000",
             headers=_headers(), timeout=15
         )
         data = resp.json()
@@ -54,10 +54,10 @@ async def sync():
             await dal.update_user(
                 session,
                 user.telegram_id,
-                remnawave_uuid=panel_user["uuid"],
+                remnawave_uuid=str(panel_user["id"]),
                 remnawave_username=panel_user["username"],
             )
-            print(f"  ✅ {user.telegram_id} (@{user.username}) → {panel_user['username']} [{panel_user['uuid'][:8]}...]")
+            print(f"  ✅ {user.telegram_id} (@{user.username}) → {panel_user['username']} [id={panel_user['id']}]")
             updated += 1
 
     print(f"\n─────────────────────────")

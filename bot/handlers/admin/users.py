@@ -172,6 +172,12 @@ async def do_assign_tariff(callback: CallbackQuery, session: AsyncSession):
     if not user or not tariff:
         await callback.answer("Не найдено", show_alert=True)
         return
+    if not user.remnawave_uuid and not user.remnawave_username:
+        await callback.answer(
+            "❌ У пользователя не задан аккаунт. Попросите пройти /start и завершить регистрацию.",
+            show_alert=True,
+        )
+        return
     try:
         squad_uuid = tariff.squad_uuid or settings.DEFAULT_SQUAD_UUID
         if user.remnawave_uuid:
@@ -185,7 +191,7 @@ async def do_assign_tariff(callback: CallbackQuery, session: AsyncSession):
                 await remnawave.add_user_to_squad(user.remnawave_uuid, squad_uuid)
         else:
             rw_user = await remnawave.create_user(
-                username=user.remnawave_username or f"user{tg_id}",
+                username=user.remnawave_username,
                 duration_days=tariff.duration_days,
                 traffic_limit_gb=tariff.traffic_limit_gb,
                 device_limit=tariff.device_limit,

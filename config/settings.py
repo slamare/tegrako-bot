@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     # Внешняя TCP-проверка доступности нод (независимо от статуса панели)
     NODE_CHECK_INTERVAL_MINUTES: int = 5
 
+    # Только для migrate_from_remnashop.py
+    REMNASHOP_DB_URL: Optional[str] = None
+
     @property
     def admin_ids(self) -> list[int]:
         return [int(x.strip()) for x in self.ADMIN_IDS.split(",") if x.strip()]

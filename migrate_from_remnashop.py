@@ -4,10 +4,7 @@ import httpx
 from config.settings import settings
 
 
-REMNASHOP_DB_URL = (
-    "postgresql://remnashop:8d25a07e704851529b2025c13d3989f08fb0c5131c07d314"
-    "@remnashop-db:5432/remnashop"
-)
+REMNASHOP_DB_URL = settings.REMNASHOP_DB_URL
 
 
 async def migrate():
@@ -38,13 +35,13 @@ async def migrate():
 
     async with httpx.AsyncClient(verify=True) as client:
         resp = await client.get(
-            f"{settings.PANEL_API_URL}/api/users?limit=1000",
+            f"{settings.PANEL_API_URL}/api/users?size=1000",
             headers={"Authorization": f"Bearer {settings.PANEL_API_KEY}"},
             timeout=15,
         )
         panel_users = resp.json().get("response", {}).get("users", [])
 
-    panel_by_uuid = {u["uuid"]: u for u in panel_users}
+    panel_by_id = {str(u["id"]): u for u in panel_users}
     print(f"📡 В панели найдено: {len(panel_users)} пользователей")
 
     migrated = skipped = errors = 0
@@ -65,8 +62,8 @@ async def migrate():
 
                 # UUID существует в панели → берём актуальный username
                 rw_username = tg_username
-                if rw_uuid and rw_uuid in panel_by_uuid:
-                    rw_username = panel_by_uuid[rw_uuid]["username"]
+                if rw_uuid and rw_uuid in panel_by_id:
+                    rw_username = panel_by_id[rw_uuid]["username"]
 
                 # 🔒 ЖЁСТКАЯ ЗАЩИТА ОТ ПЕРЕПРИВЯЗКИ UUID
                 existing_by_uuid = await dal.get_user_by_uuid(session, rw_uuid)

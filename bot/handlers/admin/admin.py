@@ -128,6 +128,11 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
                 disable_notification=True, parse_mode="HTML",
             )
         else:
+            if not user.remnawave_uuid and not user.remnawave_username:
+                await callback.answer(
+                    "❌ У пользователя не задан аккаунт. Попросите пройти /start.", show_alert=True,
+                )
+                return
             squad_uuid = tariff.squad_uuid if tariff else None
             if user.remnawave_uuid:
                 await remnawave.extend_subscription(user.remnawave_uuid, tariff.duration_days)
