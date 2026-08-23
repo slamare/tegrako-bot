@@ -22,14 +22,14 @@ router = Router()
 async def _get_tariffs_for_user(session, user) -> list:
     all_tariffs = await dal.get_active_tariffs(session)
     has_payment = await dal.has_any_approved_payment(session, user.id)
-    has_sub = bool(user.remnawave_uuid)
+    used_trial = await dal.has_used_trial(session, user.id)
     is_referral = bool(user.referred_by)
     used_referral = await dal.has_used_referral_tariff(session, user.id)
     is_first_month_referral = is_referral and not has_payment and not used_referral
     result = []
     for t in all_tariffs:
         if t.is_trial:
-            if not has_sub and not has_payment:
+            if not used_trial:
                 result.append(t)
         elif t.is_referral:
             if is_first_month_referral:

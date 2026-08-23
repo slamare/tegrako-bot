@@ -17,6 +17,7 @@ from bot.keyboards.admin_kb import (
     tariff_list_kb, tariff_manage_kb, nodes_kb, node_manage_kb,
     user_manage_kb, broadcast_target_kb, promo_list_kb, access_mode_kb,
 )
+from bot.handlers.user.start import LIFETIME_DAYS_THRESHOLD
 from bot.keyboards.user_kb import main_menu_kb
 from bot.services import remnawave
 from bot.utils.helpers import edit_or_answer, cleanup_fsm_interaction, delete_later
@@ -160,15 +161,21 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
                 referrer = await dal.get_user(session, user.referred_by)
                 if referrer and referrer.remnawave_uuid:
                     try:
-                        await remnawave.extend_subscription(referrer.remnawave_uuid, ref_days)
-                        remnawave.invalidate_sub_info_cache(referrer.remnawave_uuid)
-                        await callback.bot.send_message(
-                            referrer.telegram_id,
-                            f"🎁 <b>Реферальный бонус!</b>\n\n"
-                            f"Ваш друг @{user.username or user.telegram_id} оплатил подписку.\n"
-                            f"Вам начислено <b>+{ref_days} дней</b>.",
-                            parse_mode="HTML", disable_notification=True,
+                        referrer_rw = await remnawave.get_subscription_info(referrer.remnawave_uuid)
+                        referrer_is_lifetime = bool(
+                            referrer_rw and referrer_rw.status.value == "ACTIVE"
+                            and (referrer_rw.expire_at - datetime.now(timezone.utc)).days > LIFETIME_DAYS_THRESHOLD
                         )
+                        if not referrer_is_lifetime:
+                            await remnawave.extend_subscription(referrer.remnawave_uuid, ref_days)
+                            remnawave.invalidate_sub_info_cache(referrer.remnawave_uuid)
+                            await callback.bot.send_message(
+                                referrer.telegram_id,
+                                f"🎁 <b>Реферальный бонус!</b>\n\n"
+                                f"Ваш друг @{user.username or user.telegram_id} оплатил подписку.\n"
+                                f"Вам начислено <b>+{ref_days} дней</b>.",
+                                parse_mode="HTML", disable_notification=True,
+                            )
                     except Exception:
                         pass
 
