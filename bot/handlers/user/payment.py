@@ -3,6 +3,7 @@ import asyncio
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.keyboards.admin_kb import payment_approve_kb
@@ -45,13 +46,102 @@ async def _check_purchase_access(session, tg_id: int) -> tuple[bool, str]:
     return True, ""
 
 
-def _requisites_kb(requisites: list, back_cb: str = "menu_buy", include_promo: bool = True) -> InlineKeyboardMarkup:
+def _requisites_kb(requisites: list, back_cb: str = "back_to_tariff_detail") -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(text=req["label"], callback_data=f"req:{i}")] for i, req in enumerate(requisites)]
-    if include_promo:
-        rows.append([InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=back_cb)])
-    rows.append([InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _tariff_card(session, state: FSMContext) -> tuple[str | None, InlineKeyboardMarkup | None]:
+    data = await state.get_data()
+    tariff_id = data.get("tariff_id")
+    if not tariff_id:
+        return None, None
+    tariff = await dal.get_tariff(session, tariff_id)
+    if not tariff:
+        return None, None
+
+    amount = data.get("amount", float(tariff.price))
+    traffic = f"{tariff.traffic_limit_gb} ГБ" if tariff.traffic_limit_gb else "Безлимит"
+    devices = f"{tariff.device_limit} уст." if tariff.device_limit else "Безлимит"
+    promo_code = data.get("promo_code")
+
+    if promo_code:
+        base_price = float(tariff.price)
+        discount = base_price - amount
+        text = (
+            f"📦 <b>{tariff.name}</b>\n\n"
+            f"⏱ Срок: {tariff.duration_days} дней\n"
+            f"📊 Трафик: {traffic}\n"
+            f"📱 Устройства: {devices}\n\n"
+            f"{int(base_price)} ₽\n"
+            f"− {int(discount)} ₽\n"
+            f"💰 Итого: <b>{int(amount)} ₽</b>\n"
+            f"🎟 Промокод: <b>{promo_code}</b>"
+        )
+    else:
+        text = (
+            f"📦 <b>{tariff.name}</b>\n\n"
+            f"💰 <b>{int(amount)} ₽</b>\n"
+            f"⏱ Срок: {tariff.duration_days} дней\n"
+            f"📊 Трафик: {traffic}\n"
+            f"📱 Устройства: {devices}"
+        )
+
+    builder = InlineKeyboardBuilder()
+    requisites = settings.payment_requisites
+    pay_label = f"💳 Оплатить через {requisites[0]['label']}" if len(requisites) == 1 else f"💳 Оплатить · {int(amount)} ₽"
+    builder.button(text=pay_label, callback_data="proceed_to_payment")
+    if not promo_code:
+        builder.button(text="🎟 Ввести промокод", callback_data="enter_promo")
+    builder.button(text="◀️ Изменить тариф", callback_data="menu_buy")
+    builder.adjust(1)
+    return text, builder.as_markup()
+
+
+async def _send_payment_screen(callback: CallbackQuery, state: FSMContext, req_index: int):
+    requisites = settings.payment_requisites
+    if req_index >= len(requisites):
+        await callback.answer("Реквизит не найден", show_alert=True)
+        return
+    req = requisites[req_index]
+    data = await state.get_data()
+    await state.update_data(payment_method=req["label"])
+    details = req["details"]
+    is_image = details.lower().endswith((".png", ".jpg", ".jpeg")) or details.startswith("AgAC")
+    promo_note = f"\n🎟 Промокод: <b>{data['promo_code']}</b>" if data.get("promo_code") else ""
+    amount_str = int(data["amount"])
+    back_cb = "my_devices" if data.get("payment_type") == "device_slot" else "back_to_tariff_detail"
+    nav = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Назад", callback_data=back_cb)],
+    ])
+
+    if is_image:
+        caption = (
+            f"💳 <b>Оплата через {req['label']}</b>\n\n"
+            f"Сумма: <b>{amount_str} ₽</b>\n\n"
+            f"Отсканируйте QR-код в приложении банка.\n\n"
+            f"📌 В комментарии укажите ID: <code>{callback.from_user.id}</code>{promo_note}\n\n"
+            f"После оплаты отправьте сюда <b>скриншот</b> подтверждения."
+        )
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        msg = await callback.message.answer_photo(details, caption=caption, parse_mode="HTML", reply_markup=nav)
+        await state.update_data(bot_prompt_msg_id=msg.message_id)
+    else:
+        caption = (
+            f"💳 <b>Оплата через {req['label']}</b>\n\n"
+            f"Сумма: <b>{amount_str} ₽</b>\n\n"
+            f"Переведите по реквизитам:\n<code>{details}</code>\n\n"
+            f"📌 В комментарии укажите ID: <code>{callback.from_user.id}</code>{promo_note}\n\n"
+            f"После оплаты отправьте сюда <b>скриншот</b> подтверждения."
+        )
+        msg = await edit_or_answer(callback, caption, reply_markup=nav)
+        await state.update_data(bot_prompt_msg_id=msg.message_id if msg else None)
+
+    await state.set_state(PaymentSG.waiting_screenshot)
 
 
 # ── Покупка ───────────────────────────────────────────────────────────────────
@@ -94,24 +184,42 @@ async def choose_tariff(callback: CallbackQuery, session: AsyncSession, state: F
     if not settings.payment_requisites:
         await callback.answer("Реквизиты не настроены. Обратитесь к администратору.", show_alert=True)
         return
-    await state.update_data(tariff_id=tariff_id, amount=float(tariff.price))
-    traffic = f"{tariff.traffic_limit_gb} ГБ" if tariff.traffic_limit_gb else "Безлимит"
-    devices = f"{tariff.device_limit} уст." if tariff.device_limit else "Безлимит"
-    await edit_or_answer(
-        callback,
-        f"📦 <b>{tariff.name}</b>\n\n⏱ {tariff.duration_days} дней · 📊 {traffic} · 📱 {devices}\n"
-        f"💰 <b>{int(tariff.price)} ₽</b>\n\nВыберите способ оплаты:",
-        reply_markup=_requisites_kb(settings.payment_requisites),
-    )
+
+    await state.update_data(tariff_id=tariff_id, amount=float(tariff.price), promo_id=None, promo_code=None)
+    await state.set_state(PaymentSG.tariff_detail)
+    text, kb = await _tariff_card(session, state)
+    await edit_or_answer(callback, text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "back_to_tariff_detail")
+async def back_to_tariff_detail(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
+    text, kb = await _tariff_card(session, state)
+    if not text:
+        await menu_buy(callback, session, state)
+        return
+    await state.set_state(PaymentSG.tariff_detail)
+    await edit_or_answer(callback, text, reply_markup=kb)
+
+
+@router.callback_query(PaymentSG.tariff_detail, F.data == "proceed_to_payment")
+async def proceed_to_payment(callback: CallbackQuery, state: FSMContext):
+    requisites = settings.payment_requisites
+    if not requisites:
+        await callback.answer("Реквизиты не настроены.", show_alert=True)
+        return
     await state.set_state(PaymentSG.choose_requisite)
+    if len(requisites) == 1:
+        await _send_payment_screen(callback, state, 0)
+        return
+    await edit_or_answer(callback, "💳 <b>Выберите способ оплаты:</b>", reply_markup=_requisites_kb(requisites))
 
 
 # ── Промокод ──────────────────────────────────────────────────────────────────
 
-@router.callback_query(PaymentSG.choose_requisite, F.data == "enter_promo")
+@router.callback_query(PaymentSG.tariff_detail, F.data == "enter_promo")
 async def enter_promo_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(PaymentSG.enter_promo)
-    await edit_or_answer(callback, "🎟 Введите промокод:", reply_markup=cancel_kb("menu_buy"))
+    await edit_or_answer(callback, "🎟 Введите промокод:", reply_markup=cancel_kb("back_to_tariff_detail"))
 
 
 @router.message(PaymentSG.enter_promo, F.text)
@@ -125,16 +233,9 @@ async def apply_promo(message: Message, session: AsyncSession, state: FSMContext
         return
     new_amount = dal.apply_promo_discount(promo, data.get("amount", 0))
     await state.update_data(amount=new_amount, promo_id=promo.id, promo_code=promo.code)
-    await state.set_state(PaymentSG.choose_requisite)
-    disc = f"{promo.discount_percent}%" if promo.discount_percent else f"{int(promo.discount_fixed)} ₽"
-    msg = await message.answer(
-        f"✅ Промокод <b>{promo.code}</b> применён! Скидка: {disc}\n"
-        f"💰 Итого: <b>{int(new_amount)} ₽</b>\n\nВыберите способ оплаты:",
-        parse_mode="HTML",
-        disable_notification=True,
-        reply_markup=_requisites_kb(settings.payment_requisites, include_promo=False),
-    )
-    asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
+    await state.set_state(PaymentSG.tariff_detail)
+    text, kb = await _tariff_card(session, state)
+    await message.answer(text, parse_mode="HTML", disable_notification=True, reply_markup=kb)
 
 
 # ── Реквизиты ─────────────────────────────────────────────────────────────────
@@ -142,42 +243,7 @@ async def apply_promo(message: Message, session: AsyncSession, state: FSMContext
 @router.callback_query(PaymentSG.choose_requisite, F.data.startswith("req:"))
 async def choose_requisite(callback: CallbackQuery, state: FSMContext):
     req_index = int(callback.data.split(":")[1])
-    requisites = settings.payment_requisites
-    if req_index >= len(requisites):
-        await callback.answer("Реквизит не найден", show_alert=True)
-        return
-    req = requisites[req_index]
-    data = await state.get_data()
-    await state.update_data(payment_method=req["label"])
-    details = req["details"]
-    is_image = details.lower().endswith((".png", ".jpg", ".jpeg")) or details.startswith("AgAC")
-    promo_note = f"\n🎟 Промокод: <b>{data['promo_code']}</b>" if data.get("promo_code") else ""
-    amount_str = int(data["amount"])
-    nav = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="menu_buy")],
-        [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
-    ])
-    if is_image:
-        caption = (
-            f"💳 <b>Оплата через {req['label']}</b>\n\nОтсканируйте QR-код в приложении банка.\n\n"
-            f"📌 В комментарии укажите ID: <code>{callback.from_user.id}</code>{promo_note}\n\n"
-            f"Пришлите <b>скриншот</b> подтверждения."
-        )
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
-        msg = await callback.message.answer_photo(details, caption=caption, parse_mode="HTML", reply_markup=nav)
-        await state.update_data(bot_prompt_msg_id=msg.message_id)
-    else:
-        caption = (
-            f"💳 <b>Оплата через {req['label']}</b>\n\nПереведите <b>{amount_str} ₽</b> по реквизитам:\n\n"
-            f"<code>{details}</code>\n\n📌 В комментарии укажите ID: <code>{callback.from_user.id}</code>{promo_note}\n\n"
-            f"Пришлите <b>скриншот</b> подтверждения."
-        )
-        msg = await edit_or_answer(callback, caption, reply_markup=nav)
-        await state.update_data(bot_prompt_msg_id=msg.message_id if msg else None)
-    await state.set_state(PaymentSG.waiting_screenshot)
+    await _send_payment_screen(callback, state, req_index)
     await callback.answer()
 
 
@@ -200,6 +266,7 @@ async def receive_screenshot(message: Message, session: AsyncSession, state: FSM
         amount=amount,
         payment_method=data.get("payment_method", "—"),
         screenshot_file_id=file_id,
+        payment_type=data.get("payment_type", "subscription"),
         promo_id=data.get("promo_id"),
     )
     promo_note = f"\n🎟 {data['promo_code']}" if data.get("promo_code") else ""
@@ -223,13 +290,17 @@ async def receive_screenshot(message: Message, session: AsyncSession, state: FSM
     await cleanup_fsm_interaction(message, state)
     await state.clear()
     msg = await message.answer(
-        "✅ <b>Скриншот получен!</b>\n\nПлатёж отправлен на проверку. Обычно до 30 минут.\n"
-        "После подтверждения получите уведомление.",
+        f"✅ <b>Платёж получен</b>\n\n"
+        f"Сумма: {int(amount)} ₽\n"
+        f"Тариф: {tariff.name if tariff else 'доп. устройство'}\n\n"
+        f"Статус:\n🟡 Ожидает проверки\n\n"
+        f"После подтверждения подписка будет активирована.",
         parse_mode="HTML",
         disable_notification=True,
-        reply_markup=main_menu_kb(is_admin=message.from_user.id in settings.admin_ids),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+        ]),
     )
-    asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
 
 @router.message(PaymentSG.waiting_screenshot, F.text)
@@ -300,14 +371,19 @@ async def buy_device_slot(callback: CallbackQuery, session: AsyncSession, state:
     if not allowed:
         await callback.answer(error, show_alert=True)
         return
-    if not settings.payment_requisites:
+    requisites = settings.payment_requisites
+    if not requisites:
         await callback.answer("Реквизиты не настроены.", show_alert=True)
         return
-    await state.update_data(tariff_id=None, amount=settings.DEVICE_SLOT_PRICE, payment_type="device_slot")
+    await state.update_data(tariff_id=None, amount=settings.DEVICE_SLOT_PRICE, payment_type="device_slot",
+                             promo_id=None, promo_code=None)
+    await state.set_state(PaymentSG.choose_requisite)
+    if len(requisites) == 1:
+        await _send_payment_screen(callback, state, 0)
+        return
     await edit_or_answer(
         callback,
         f"📱 <b>Дополнительный слот устройства</b>\n\nСтоимость: <b>{int(settings.DEVICE_SLOT_PRICE)} ₽</b>\n\n"
         f"После подтверждения лимит устройств увеличится на 1.\n\nВыберите способ оплаты:",
-        reply_markup=_requisites_kb(settings.payment_requisites, back_cb="my_devices", include_promo=False),
+        reply_markup=_requisites_kb(requisites, back_cb="my_devices"),
     )
-    await state.set_state(PaymentSG.choose_requisite)

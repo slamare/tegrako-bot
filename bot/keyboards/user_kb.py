@@ -9,24 +9,29 @@ def remove_kb() -> ReplyKeyboardRemove:
 
 def main_menu_kb(
     is_admin: bool = False,
-    has_sub: bool = False,
+    status: str = "NONE",
     show_proxy: bool = False,
     sub_url: str | None = None,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    if has_sub:
+    if status == "ACTIVE":
         if sub_url:
             builder.button(text="🔗 Открыть подписку", url=sub_url)
-        builder.button(text="⚙️ Управление подпиской", callback_data="menu_profile")
         builder.button(text="🔄 Продлить подписку", callback_data="renew_subscription")
         builder.button(text="📱 Устройства", callback_data="my_devices")
         if show_proxy:
             builder.button(text="📡 Telegram Proxy", callback_data="menu_proxy")
+        builder.button(text="🔄 Перевыпустить ссылку", callback_data="revoke_subscription")
+        builder.button(text="💳 История платежей", callback_data="payment_history")
+        builder.button(text="👥 Пригласить друга", callback_data="menu_invite")
+        builder.button(text="💬 Поддержка", callback_data="menu_support")
+    elif status == "EXPIRED":
+        builder.button(text="🔄 Продлить подписку", callback_data="renew_subscription")
+        builder.button(text="💳 История платежей", callback_data="payment_history")
         builder.button(text="👥 Пригласить друга", callback_data="menu_invite")
         builder.button(text="💬 Поддержка", callback_data="menu_support")
     else:
         builder.button(text="🛒 Купить подписку", callback_data="menu_buy")
-        builder.button(text="👥 Пригласить друга", callback_data="menu_invite")
         builder.button(text="💬 Поддержка", callback_data="menu_support")
 
     if is_admin:
@@ -43,10 +48,11 @@ def back_kb(callback_data: str = "main_menu") -> InlineKeyboardMarkup:
 def tariffs_kb(tariffs: list[Tariff]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for t in tariffs:
-        traffic = f"{t.traffic_limit_gb} ГБ" if t.traffic_limit_gb else "∞"
+        traffic = f"{t.traffic_limit_gb} ГБ" if t.traffic_limit_gb else "Безлимит"
         devices = f"{t.device_limit} уст." if t.device_limit else "∞ уст."
-        label = f"{t.name} — {int(t.price)} ₽ | {t.duration_days}д | {traffic} | {devices}"
-        builder.button(text=label, callback_data=f"tariff:{t.id}")
+        badge = "🎁 " if t.is_trial else ("👥 " if t.is_referral else "")
+        builder.button(text=f"{badge}{t.name} · {int(t.price)} ₽", callback_data=f"tariff:{t.id}")
+        builder.button(text=f"{t.duration_days} дн. · {traffic} · {devices}", callback_data="noop")
     builder.button(text="◀️ Назад", callback_data="main_menu")
     builder.adjust(1)
     return builder.as_markup()
@@ -55,26 +61,6 @@ def cancel_kb(back_cb: str = "main_menu") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отмена", callback_data=back_cb)]
     ])
-
-def profile_kb(status: str, sub_url: str | None = None) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    if status == "ACTIVE":
-        if sub_url:
-            builder.button(text="🔗 Открыть подписку", url=sub_url)
-        builder.button(text="📱 Устройства", callback_data="my_devices")
-        builder.button(text="🔄 Перевыпустить ссылку", callback_data="revoke_subscription")
-        builder.button(text="💳 История платежей", callback_data="payment_history")
-    elif status == "EXPIRED":
-        builder.button(text="🔄 Продлить подписку", callback_data="renew_subscription")
-        builder.button(text="💳 История платежей", callback_data="payment_history")
-    elif status == "NONE":
-        builder.button(text="🛒 Купить подписку", callback_data="menu_buy")
-        builder.button(text="💳 История платежей", callback_data="payment_history")
-    else:
-        builder.button(text="💳 История платежей", callback_data="payment_history")
-    builder.button(text="◀️ Назад", callback_data="main_menu")
-    builder.adjust(1)
-    return builder.as_markup()
 
 def devices_kb(devices: list, show_buy_slot: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -88,8 +74,7 @@ def devices_kb(devices: list, show_buy_slot: bool = False) -> InlineKeyboardMark
         builder.button(text="🗑 Удалить все", callback_data="delete_all_devices")
     if show_buy_slot:
         builder.button(text="➕ Добавить слот устройства", callback_data="buy_device_slot")
-    builder.button(text="◀️ Назад", callback_data="menu_profile")
-    builder.button(text="🏠 Меню", callback_data="main_menu")
+    builder.button(text="◀️ Назад", callback_data="main_menu")
     builder.adjust(1)
     return builder.as_markup()
 

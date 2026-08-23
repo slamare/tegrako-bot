@@ -7,6 +7,7 @@ class RegistrationSG(StatesGroup):
 
 class PaymentSG(StatesGroup):
     choose_tariff = State()
+    tariff_detail = State()
     choose_requisite = State()
     waiting_screenshot = State()
     enter_promo = State()
