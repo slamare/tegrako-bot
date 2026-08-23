@@ -7,37 +7,37 @@ def remove_kb() -> ReplyKeyboardRemove:
     """Удаляет reply-клавиатуру"""
     return ReplyKeyboardRemove(remove_keyboard=True)
 
-def main_menu_kb(is_admin: bool = False, has_sub: bool = False, show_proxy: bool = False) -> InlineKeyboardMarkup:
+def main_menu_kb(
+    is_admin: bool = False,
+    has_sub: bool = False,
+    show_proxy: bool = False,
+    sub_url: str | None = None,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="👤 Моя подписка", callback_data="menu_profile")
-    builder.button(text="🛒 Купить подписку", callback_data="menu_buy")
-    builder.button(text="💬 Поддержка", callback_data="menu_support")
-    builder.button(text="👥 Пригласить друга", callback_data="menu_invite")
-    if show_proxy:
-        builder.button(text="📡 Proxy для Telegram", callback_data="menu_proxy")
-    
+    if has_sub:
+        if sub_url:
+            builder.button(text="🔗 Открыть подписку", url=sub_url)
+        builder.button(text="📦 Моя подписка", callback_data="menu_profile")
+        builder.button(text="🔄 Продлить подписку", callback_data="renew_subscription")
+        builder.button(text="📱 Устройства", callback_data="my_devices")
+        if show_proxy:
+            builder.button(text="📡 Telegram Proxy", callback_data="menu_proxy")
+        builder.button(text="👥 Пригласить друга", callback_data="menu_invite")
+        builder.button(text="💬 Поддержка", callback_data="menu_support")
+    else:
+        builder.button(text="🛒 Купить подписку", callback_data="menu_buy")
+        builder.button(text="👥 Пригласить друга", callback_data="menu_invite")
+        builder.button(text="💬 Поддержка", callback_data="menu_support")
+
     if is_admin:
         builder.button(text="⚙️ Администратор", callback_data="admin_menu")
-    
-    builder.adjust(2)
-    return builder.as_markup()
 
-def back_main_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
-    ])
+    builder.adjust(1, 2)
+    return builder.as_markup()
 
 def back_kb(callback_data: str = "main_menu") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀️ Назад", callback_data=callback_data)]
-    ])
-
-def nav_kb(back_cb: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="◀️ Назад", callback_data=back_cb),
-            InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu"),
-        ]
     ])
 
 def tariffs_kb(tariffs: list[Tariff]) -> InlineKeyboardMarkup:
@@ -51,31 +51,29 @@ def tariffs_kb(tariffs: list[Tariff]) -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
-def payment_methods_kb(requisites: list[dict], back_cb: str = "menu_buy") -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    for i, req in enumerate(requisites):
-        builder.button(text=req["label"], callback_data=f"req:{i}")
-    builder.button(text="🎟 Ввести промокод", callback_data="enter_promo")
-    builder.button(text="◀️ Назад", callback_data=back_cb)
-    builder.button(text="🏠 Меню", callback_data="main_menu")
-    builder.adjust(1)
-    return builder.as_markup()
-
 def cancel_kb(back_cb: str = "main_menu") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отмена", callback_data=back_cb)]
     ])
 
-def profile_kb(has_subscription: bool = True, sub_url: str | None = None) -> InlineKeyboardMarkup:
+def profile_kb(status: str, sub_url: str | None = None) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    if has_subscription:
+    if status == "ACTIVE":
         if sub_url:
             builder.button(text="🔗 Открыть подписку", url=sub_url)
-        builder.button(text="🔄 Сбросить ссылку", callback_data="revoke_subscription")
-        builder.button(text="📱 Мои устройства", callback_data="my_devices")
+        builder.button(text="📱 Устройства", callback_data="my_devices")
+        builder.button(text="🔄 Перевыпустить ссылку", callback_data="revoke_subscription")
         builder.button(text="💳 История платежей", callback_data="payment_history")
-        builder.button(text="🏠 Меню", callback_data="main_menu")
-        builder.adjust(1)
+    elif status == "EXPIRED":
+        builder.button(text="🔄 Продлить подписку", callback_data="renew_subscription")
+        builder.button(text="💳 История платежей", callback_data="payment_history")
+    elif status == "NONE":
+        builder.button(text="🛒 Купить подписку", callback_data="menu_buy")
+        builder.button(text="💳 История платежей", callback_data="payment_history")
+    else:
+        builder.button(text="💳 История платежей", callback_data="payment_history")
+    builder.button(text="◀️ Назад", callback_data="main_menu")
+    builder.adjust(1)
     return builder.as_markup()
 
 def devices_kb(devices: list, show_buy_slot: bool = False) -> InlineKeyboardMarkup:

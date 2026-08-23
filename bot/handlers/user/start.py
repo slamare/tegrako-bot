@@ -18,7 +18,7 @@ from bot.states.states import RegistrationSG, SupportSG
 from bot.keyboards.admin_kb import ticket_reply_kb
 from bot.services.notifications import notify_admins
 from bot.keyboards.user_kb import (
-    main_menu_kb, back_kb, nav_kb, profile_kb, proxy_kb,
+    main_menu_kb, back_kb, profile_kb, proxy_kb,
     devices_kb, cancel_kb, remove_kb,
 )
 from bot.services import remnawave
@@ -50,16 +50,21 @@ def _has_active_proxy_access(rw) -> bool:
     return False
 
 
-def _sub_status_line(rw) -> str:
+def _sub_status_line(rw, device_count: int = 0, device_limit: int = 0) -> str:
     if not rw:
-        return ""
+        return "\n\n🔴 Подписка не активна"
     now = datetime.now(timezone.utc)
     days_left = (rw.expire_at - now).days
-    used_gb = round(rw.user_traffic.used_traffic_bytes / 1024 ** 3, 1)
-    limit_gb = round(rw.traffic_limit_bytes / 1024 ** 3, 1) if rw.traffic_limit_bytes else None
-    traffic = f"{used_gb}/{limit_gb} ГБ" if limit_gb else f"{used_gb} ГБ"
     if rw.status.value == "ACTIVE":
-        return f"\n\n🟢 Подписка активна · {days_left} дн. · {traffic}"
+        used_gb = round(rw.user_traffic.used_traffic_bytes / 1024 ** 3, 1)
+        limit_gb = round(rw.traffic_limit_bytes / 1024 ** 3, 1) if rw.traffic_limit_bytes else None
+        traffic = f"{used_gb}/{limit_gb} ГБ" if limit_gb else f"{used_gb} ГБ"
+        limit_str = str(device_limit) if device_limit else "∞"
+        return (
+            f"\n\n🟢 Подписка активна · {days_left} дн."
+            f"\n📊 Трафик: {traffic}"
+            f"\n📱 Устройства: {device_count} / {limit_str}"
+        )
     if rw.status.value == "EXPIRED":
         return "\n\n🔴 Подписка истекла"
     return f"\n\n⚪ Статус подписки: {rw.status.value}"
@@ -68,18 +73,23 @@ def _sub_status_line(rw) -> str:
 async def _get_menu_context(session, tg_id: int, remnawave_uuid: str | None) -> tuple[InlineKeyboardMarkup, str]:
     is_adm = tg_id in settings.admin_ids
     show_proxy = False
-    status_line = ""
+    sub_url = None
+    status_line = "\n\n🔴 Подписка не активна"
+    has_sub = bool(remnawave_uuid)
     if remnawave_uuid:
         try:
             rw = await remnawave.get_subscription_info(remnawave_uuid)
-            status_line = _sub_status_line(rw)
+            devices = await remnawave.get_user_devices(remnawave_uuid)
+            status_line = _sub_status_line(rw, len(devices), rw.hwid_device_limit if rw else 0)
+            if rw and rw.status.value == "ACTIVE":
+                sub_url = rw.subscription_url
             user = await dal.get_user(session, tg_id)
             has_secret = bool(user and user.mtproto_secret)
             if has_secret:
                 show_proxy = _has_active_proxy_access(rw)
         except Exception as e:
             logger.warning(f"menu context failed tg={tg_id}: {e}")
-    kb = main_menu_kb(is_admin=is_adm, show_proxy=show_proxy)
+    kb = main_menu_kb(is_admin=is_adm, has_sub=has_sub, show_proxy=show_proxy, sub_url=sub_url)
     return kb, status_line
 
 
@@ -283,40 +293,40 @@ async def _profile_text_and_kb(session, tg_id: int):
     user = await dal.get_user(session, tg_id)
     if not user or not user.is_registered:
         return None, None
-    has_sub = bool(user.remnawave_uuid)
-    sub_info = ""
+
+    if not user.remnawave_uuid:
+        text = "👤 <b>Моя подписка</b>\n\n🔴 Подписка не активна"
+        return text, profile_kb("NONE")
+
+    status = "NONE"
     sub_url = None
-    if has_sub:
-        try:
-            rw = await remnawave.get_subscription_info(user.remnawave_uuid)
-            if rw:
+    body = ""
+    try:
+        rw = await remnawave.get_subscription_info(user.remnawave_uuid)
+        if rw:
+            status = rw.status.value
+            expire_str = rw.expire_at.strftime("%d.%m.%Y")
+            if status == "ACTIVE":
                 sub_url = rw.subscription_url
-                now = datetime.now(timezone.utc)
-                days_left = (rw.expire_at - now).days
-                expire_str = rw.expire_at.strftime("%d.%m.%Y")
                 used_gb = round(rw.user_traffic.used_traffic_bytes / 1024 ** 3, 2)
                 limit_gb = round(rw.traffic_limit_bytes / 1024 ** 3, 1) if rw.traffic_limit_bytes else "∞"
-                s_emoji = {"ACTIVE": "🟢", "EXPIRED": "🔴", "DISABLED": "⚫"}.get(rw.status.value, "⚪")
-                sub_info = (
-                    f"\n\n<b>Подписка:</b>\n"
-                    f"{s_emoji} Статус: {rw.status.value}\n"
-                    f"📅 До: {expire_str} ({days_left} дн.)\n"
-                    f"📊 Трафик: {used_gb} / {limit_gb} ГБ"
+                devices = await remnawave.get_user_devices(user.remnawave_uuid)
+                limit_str = str(rw.hwid_device_limit) if rw.hwid_device_limit else "∞"
+                body = (
+                    f"🟢 Активна\nДо {expire_str}\n\n"
+                    f"📊 Трафик\n{used_gb} / {limit_gb} ГБ\n\n"
+                    f"📱 Устройства\n{len(devices)} / {limit_str}"
                 )
-        except Exception:
-            sub_info = "\n\n⚠️ Не удалось получить данные подписки"
+            elif status == "EXPIRED":
+                body = f"🔴 Подписка истекла\nИстекла: {expire_str}"
+            else:
+                s_emoji = {"DISABLED": "⚫"}.get(status, "⚪")
+                body = f"{s_emoji} Статус: {status}"
+    except Exception:
+        body = "⚠️ Не удалось получить данные подписки"
 
-    ref_count = await dal.count_referrals(session, tg_id)
-    ref_paid = await dal.get_referrals_with_payment(session, tg_id)
-
-    text = (
-        f"👤 <b>Управление подпиской</b>\n\n"
-        f"🆔 ID: <code>{tg_id}</code>\n"
-        f"👤 Аккаунт: <code>{user.remnawave_username}</code>"
-        f"{sub_info}"
-        f"\n\n👥 Рефералов: {ref_count} (оплатили: {len(ref_paid)})"
-    )
-    return text, profile_kb(has_sub, sub_url)
+    text = f"👤 <b>Моя подписка</b>\n\n{body}"
+    return text, profile_kb(status, sub_url)
 
 
 @router.callback_query(F.data == "menu_profile")
@@ -333,12 +343,12 @@ async def menu_profile(callback: CallbackQuery, session: AsyncSession):
 @router.callback_query(F.data == "revoke_subscription")
 async def revoke_subscription_prompt(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Да, сбросить", callback_data="revoke_subscription_confirm")],
+        [InlineKeyboardButton(text="🔄 Перевыпустить", callback_data="revoke_subscription_confirm")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_profile")],
     ])
     await edit_or_answer(callback,
-        "⚠️ <b>Подтвердите сброс ссылки</b>\n\n"
-        "Старая ссылка перестанет работать. Нужно обновить её во всех приложениях.",
+        "⚠️ <b>Перевыпустить ссылку?</b>\n\n"
+        "Старая ссылка перестанет работать на подключённых устройствах.",
         reply_markup=kb,
     )
 
@@ -351,17 +361,16 @@ async def revoke_subscription_confirm(callback: CallbackQuery, session: AsyncSes
         return
     rw = await remnawave.revoke_subscription(user.remnawave_uuid)
     if not rw:
-        await callback.answer("Ошибка при сбросе ссылки", show_alert=True)
+        await callback.answer("Ошибка при перевыпуске ссылки", show_alert=True)
         return
 
     remnawave.invalidate_sub_info_cache(user.remnawave_uuid)
 
     await edit_or_answer(callback,
-        "✅ <b>Ссылка обновлена!</b>\n\nОбновите подписку во всех приложениях.",
+        "✅ <b>Ссылка перевыпущена</b>\n\nСтарая ссылка больше не действует.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔗 Открыть новую подписку", url=rw.subscription_url)],
+            [InlineKeyboardButton(text="🔗 Открыть подписку", url=rw.subscription_url)],
             [InlineKeyboardButton(text="◀️ Назад", callback_data="menu_profile")],
-            [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
         ]),
     )
 
@@ -465,7 +474,7 @@ async def payment_history(callback: CallbackQuery, session: AsyncSession):
                 f"{int(p.amount)} ₽ ({tariff_name})"
             )
         text = "\n".join(lines)
-    await edit_or_answer(callback, text, reply_markup=nav_kb("menu_profile"))
+    await edit_or_answer(callback, text, reply_markup=back_kb("menu_profile"))
 
 
 # ── Реферальная программа ─────────────────────────────────────────────────────

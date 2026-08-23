@@ -6,7 +6,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.keyboards.admin_kb import payment_approve_kb
-from bot.keyboards.user_kb import tariffs_kb, nav_kb, cancel_kb, main_menu_kb
+from bot.keyboards.user_kb import tariffs_kb, cancel_kb, main_menu_kb
 from bot.states.states import PaymentSG
 from bot.utils.helpers import edit_or_answer, cleanup_fsm_interaction, delete_later
 from config.settings import settings

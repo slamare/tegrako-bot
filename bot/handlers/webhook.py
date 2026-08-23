@@ -214,7 +214,7 @@ async def _handle_hwid_event(bot: Bot, event: str, data: dict):
         model = data.get("deviceModel") or data.get("device", {}).get("deviceModel") or ""
         device_str = f"{platform} {model}".strip()
         kb_rows = [
-            [InlineKeyboardButton(text="🔄 Сбросить ссылку подписки", callback_data="revoke_subscription_confirm")],
+            [InlineKeyboardButton(text="🔄 Перевыпустить ссылку подписки", callback_data="revoke_subscription_confirm")],
         ]
         try:
             await bot.send_message(
