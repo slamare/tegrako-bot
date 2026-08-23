@@ -50,6 +50,12 @@ def _has_active_proxy_access(rw) -> bool:
     return False
 
 
+def _days_left_label(days_left: int) -> str:
+    if days_left > 3650:
+        return "♾ Бессрочно"
+    return f"{days_left} дн."
+
+
 def _sub_status_line(rw, device_count: int = 0, device_limit: int = 0) -> str:
     if not rw:
         return "\n\n🔴 Подписка не активна"
@@ -61,7 +67,7 @@ def _sub_status_line(rw, device_count: int = 0, device_limit: int = 0) -> str:
         traffic = f"{used_gb}/{limit_gb} ГБ" if limit_gb else f"{used_gb} ГБ"
         limit_str = str(device_limit) if device_limit else "∞"
         return (
-            f"\n\n🟢 Подписка активна · {days_left} дн."
+            f"\n\n🟢 Подписка активна · {_days_left_label(days_left)}"
             f"\n📊 Трафик: {traffic}"
             f"\n📱 Устройства: {device_count} / {limit_str}"
         )
@@ -295,7 +301,7 @@ async def _profile_text_and_kb(session, tg_id: int):
         return None, None
 
     if not user.remnawave_uuid:
-        text = "👤 <b>Моя подписка</b>\n\n🔴 Подписка не активна"
+        text = "⚙️ <b>Управление подпиской</b>\n\n🔴 Подписка не активна"
         return text, profile_kb("NONE")
 
     status = "NONE"
@@ -325,7 +331,7 @@ async def _profile_text_and_kb(session, tg_id: int):
     except Exception:
         body = "⚠️ Не удалось получить данные подписки"
 
-    text = f"👤 <b>Моя подписка</b>\n\n{body}"
+    text = f"⚙️ <b>Управление подпиской</b>\n\n{body}"
     return text, profile_kb(status, sub_url)
 
 

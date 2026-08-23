@@ -17,7 +17,7 @@ def main_menu_kb(
     if has_sub:
         if sub_url:
             builder.button(text="🔗 Открыть подписку", url=sub_url)
-        builder.button(text="📦 Моя подписка", callback_data="menu_profile")
+        builder.button(text="⚙️ Управление подпиской", callback_data="menu_profile")
         builder.button(text="🔄 Продлить подписку", callback_data="renew_subscription")
         builder.button(text="📱 Устройства", callback_data="my_devices")
         if show_proxy:
