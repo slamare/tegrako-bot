@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     PANEL_API_URL: str
     PANEL_API_KEY: str
     DEFAULT_SQUAD_UUID: Optional[str] = None
+    ADMIN_GRANT_SQUAD_UUID: Optional[str] = None
 
     # Bot UI
     BOT_NAME: str = "TegraVPN"

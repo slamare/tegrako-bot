@@ -50,8 +50,11 @@ def _has_active_proxy_access(rw) -> bool:
     return False
 
 
+LIFETIME_DAYS_THRESHOLD = 3650
+
+
 def _days_left_label(days_left: int) -> str:
-    if days_left > 3650:
+    if days_left > LIFETIME_DAYS_THRESHOLD:
         return "♾ Бессрочно"
     return f"{days_left} дн."
 
@@ -81,6 +84,7 @@ async def _get_menu_context(session, tg_id: int, remnawave_uuid: str | None) -> 
     show_proxy = False
     sub_url = None
     status = "NONE"
+    is_lifetime = False
     status_line = "\n\n🔴 Подписка не активна"
     if remnawave_uuid:
         try:
@@ -91,13 +95,15 @@ async def _get_menu_context(session, tg_id: int, remnawave_uuid: str | None) -> 
                 status = rw.status.value if rw.status.value in ("ACTIVE", "EXPIRED") else "NONE"
                 if status == "ACTIVE":
                     sub_url = rw.subscription_url
+                    now = datetime.now(timezone.utc)
+                    is_lifetime = (rw.expire_at - now).days > LIFETIME_DAYS_THRESHOLD
             user = await dal.get_user(session, tg_id)
             has_secret = bool(user and user.mtproto_secret)
             if has_secret:
                 show_proxy = _has_active_proxy_access(rw)
         except Exception as e:
             logger.warning(f"menu context failed tg={tg_id}: {e}")
-    kb = main_menu_kb(is_admin=is_adm, status=status, show_proxy=show_proxy, sub_url=sub_url)
+    kb = main_menu_kb(is_admin=is_adm, status=status, show_proxy=show_proxy, sub_url=sub_url, is_lifetime=is_lifetime)
     return kb, status_line
 
 
@@ -762,11 +768,6 @@ async def catch_text_global(message: Message, session: AsyncSession, state: FSMC
 
 
 # ── Отмена ───────────────────────────────────────────────────────────────────
-
-@router.callback_query(F.data == "noop")
-async def noop(callback: CallbackQuery):
-    await callback.answer()
-
 
 @router.callback_query(F.data == "cancel")
 async def cancel_action(callback: CallbackQuery, state: FSMContext, session: AsyncSession):

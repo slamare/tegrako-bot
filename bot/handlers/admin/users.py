@@ -179,7 +179,7 @@ async def do_assign_tariff(callback: CallbackQuery, session: AsyncSession):
         )
         return
     try:
-        squad_uuid = tariff.squad_uuid or settings.DEFAULT_SQUAD_UUID
+        squad_uuid = settings.ADMIN_GRANT_SQUAD_UUID or tariff.squad_uuid or settings.DEFAULT_SQUAD_UUID
         if user.remnawave_uuid:
             await remnawave.extend_subscription(user.remnawave_uuid, tariff.duration_days)
             await remnawave.update_user_limits(

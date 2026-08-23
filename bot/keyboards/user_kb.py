@@ -12,12 +12,14 @@ def main_menu_kb(
     status: str = "NONE",
     show_proxy: bool = False,
     sub_url: str | None = None,
+    is_lifetime: bool = False,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if status == "ACTIVE":
         if sub_url:
             builder.button(text="🔗 Открыть подписку", url=sub_url)
-        builder.button(text="🔄 Продлить подписку", callback_data="renew_subscription")
+        if not is_lifetime:
+            builder.button(text="🔄 Продлить подписку", callback_data="renew_subscription")
         builder.button(text="📱 Устройства", callback_data="my_devices")
         if show_proxy:
             builder.button(text="📡 Telegram Proxy", callback_data="menu_proxy")
@@ -48,14 +50,21 @@ def back_kb(callback_data: str = "main_menu") -> InlineKeyboardMarkup:
 def tariffs_kb(tariffs: list[Tariff]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for t in tariffs:
-        traffic = f"{t.traffic_limit_gb} ГБ" if t.traffic_limit_gb else "Безлимит"
-        devices = f"{t.device_limit} уст." if t.device_limit else "∞ уст."
         badge = "🎁 " if t.is_trial else ("👥 " if t.is_referral else "")
         builder.button(text=f"{badge}{t.name} · {int(t.price)} ₽", callback_data=f"tariff:{t.id}")
-        builder.button(text=f"{t.duration_days} дн. · {traffic} · {devices}", callback_data="noop")
     builder.button(text="◀️ Назад", callback_data="main_menu")
     builder.adjust(1)
     return builder.as_markup()
+
+
+def tariffs_list_text(tariffs: list[Tariff]) -> str:
+    lines = ["📦 <b>Выберите тариф:</b>\n"]
+    for t in tariffs:
+        badge = "🎁 " if t.is_trial else ("👥 " if t.is_referral else "")
+        traffic = f"{t.traffic_limit_gb} ГБ" if t.traffic_limit_gb else "Безлимит"
+        devices = f"{t.device_limit} уст." if t.device_limit else "∞ уст."
+        lines.append(f"{badge}<b>{t.name}</b> — {int(t.price)} ₽\n{t.duration_days} дн. · {traffic} · {devices}\n")
+    return "\n".join(lines)
 
 def cancel_kb(back_cb: str = "main_menu") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[

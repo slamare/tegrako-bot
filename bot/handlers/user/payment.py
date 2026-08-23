@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -6,8 +7,10 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bot.handlers.user.start import LIFETIME_DAYS_THRESHOLD
 from bot.keyboards.admin_kb import payment_approve_kb
-from bot.keyboards.user_kb import tariffs_kb, cancel_kb, main_menu_kb
+from bot.keyboards.user_kb import tariffs_kb, tariffs_list_text, cancel_kb, main_menu_kb
+from bot.services import remnawave
 from bot.states.states import PaymentSG
 from bot.utils.helpers import edit_or_answer, cleanup_fsm_interaction, delete_later
 from config.settings import settings
@@ -160,7 +163,7 @@ async def menu_buy(callback: CallbackQuery, session: AsyncSession, state: FSMCon
     if not tariffs:
         await callback.answer("Тарифы временно недоступны.", show_alert=True)
         return
-    await edit_or_answer(callback, "📦 <b>Выберите тариф:</b>", reply_markup=tariffs_kb(tariffs))
+    await edit_or_answer(callback, tariffs_list_text(tariffs), reply_markup=tariffs_kb(tariffs))
     await state.set_state(PaymentSG.choose_tariff)
 
 
@@ -346,6 +349,13 @@ async def wrong_format(message: Message):
 @router.callback_query(F.data == "renew_subscription")
 async def renew_subscription(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
     user = await dal.get_user(session, callback.from_user.id)
+    if user and user.remnawave_uuid:
+        rw = await remnawave.get_subscription_info(user.remnawave_uuid)
+        if rw and rw.status.value == "ACTIVE":
+            now = datetime.now(timezone.utc)
+            if (rw.expire_at - now).days > LIFETIME_DAYS_THRESHOLD:
+                await callback.answer("У вас бессрочная подписка — продление не требуется.", show_alert=True)
+                return
     allowed, error = await _check_purchase_access(session, callback.from_user.id)
     if not allowed:
         await callback.answer(error, show_alert=True)
@@ -354,7 +364,7 @@ async def renew_subscription(callback: CallbackQuery, session: AsyncSession, sta
     if not tariffs:
         await callback.answer("Тарифы временно недоступны", show_alert=True)
         return
-    await edit_or_answer(callback, "📦 <b>Выберите тариф:</b>", reply_markup=tariffs_kb(tariffs))
+    await edit_or_answer(callback, tariffs_list_text(tariffs), reply_markup=tariffs_kb(tariffs))
     await state.set_state(PaymentSG.choose_tariff)
 
 
