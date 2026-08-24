@@ -156,7 +156,8 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
             if payment.promo_id:
                 await dal.use_promo(session, payment.promo_id)
 
-            ref_days = int(await dal.get_setting(session, "referral_days", "0"))
+            ref_rate = int(await dal.get_setting(session, "referral_days", "0"))
+            ref_days = round(tariff.duration_days / 30 * ref_rate) if tariff else 0
             if ref_days > 0 and user.referred_by:
                 referrer = await dal.get_user(session, user.referred_by)
                 if referrer and referrer.remnawave_uuid:

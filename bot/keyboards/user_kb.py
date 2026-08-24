@@ -50,7 +50,7 @@ def back_kb(callback_data: str = "main_menu") -> InlineKeyboardMarkup:
 def tariffs_kb(tariffs: list[Tariff]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for t in tariffs:
-        badge = "🎁 " if t.is_trial else ("👥 " if t.is_referral else "")
+        badge = "🎁 " if t.is_trial else ""
         builder.button(text=f"{badge}{t.name} · {int(t.price)} ₽", callback_data=f"tariff:{t.id}")
     builder.button(text="◀️ Назад", callback_data="main_menu")
     builder.adjust(1)
@@ -60,7 +60,7 @@ def tariffs_kb(tariffs: list[Tariff]) -> InlineKeyboardMarkup:
 def tariffs_list_text(tariffs: list[Tariff]) -> str:
     lines = ["📦 <b>Выберите тариф:</b>\n"]
     for t in tariffs:
-        badge = "🎁 " if t.is_trial else ("👥 " if t.is_referral else "")
+        badge = "🎁 " if t.is_trial else ""
         traffic = f"{t.traffic_limit_gb} ГБ" if t.traffic_limit_gb else "Безлимит"
         devices = f"{t.device_limit} уст." if t.device_limit else "∞ уст."
         lines.append(f"{badge}<b>{t.name}</b> — {int(t.price)} ₽\n{t.duration_days} дн. · {traffic} · {devices}\n")

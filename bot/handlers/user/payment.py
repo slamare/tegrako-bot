@@ -21,23 +21,21 @@ router = Router()
 
 async def _get_tariffs_for_user(session, user) -> list:
     all_tariffs = await dal.get_active_tariffs(session)
-    has_payment = await dal.has_any_approved_payment(session, user.id)
     used_trial = await dal.has_used_trial(session, user.id)
-    is_referral = bool(user.referred_by)
-    used_referral = await dal.has_used_referral_tariff(session, user.id)
-    is_first_month_referral = is_referral and not has_payment and not used_referral
     result = []
     for t in all_tariffs:
         if t.is_trial:
             if not used_trial:
                 result.append(t)
-        elif t.is_referral:
-            if is_first_month_referral:
-                result.append(t)
         else:
-            if not is_first_month_referral:
-                result.append(t)
+            result.append(t)
     return result
+
+
+async def _is_referral_discount_eligible(session, user) -> bool:
+    if not user.referred_by or settings.REFERRAL_DISCOUNT_PERCENT <= 0:
+        return False
+    return not await dal.has_any_approved_payment(session, user.id)
 
 
 async def _check_purchase_access(session, tg_id: int) -> tuple[bool, str]:
@@ -65,22 +63,27 @@ async def _tariff_card(session, state: FSMContext) -> tuple[str | None, InlineKe
         return None, None
 
     amount = data.get("amount", float(tariff.price))
+    base_price = float(tariff.price)
     traffic = f"{tariff.traffic_limit_gb} ГБ" if tariff.traffic_limit_gb else "Безлимит"
     devices = f"{tariff.device_limit} уст." if tariff.device_limit else "Безлимит"
     promo_code = data.get("promo_code")
+    referral_discount = data.get("referral_discount_applied", False)
 
-    if promo_code:
-        base_price = float(tariff.price)
-        discount = base_price - amount
+    if amount < base_price:
+        discount_lines = []
+        if referral_discount:
+            discount_lines.append(f"🎁 Скидка за приглашение: −{settings.REFERRAL_DISCOUNT_PERCENT:g}%")
+        if promo_code:
+            discount_lines.append(f"🎟 Промокод: <b>{promo_code}</b>")
         text = (
             f"📦 <b>{tariff.name}</b>\n\n"
             f"⏱ Срок: {tariff.duration_days} дней\n"
             f"📊 Трафик: {traffic}\n"
             f"📱 Устройства: {devices}\n\n"
             f"{int(base_price)} ₽\n"
-            f"− {int(discount)} ₽\n"
+            f"− {int(base_price - amount)} ₽\n"
             f"💰 Итого: <b>{int(amount)} ₽</b>\n"
-            f"🎟 Промокод: <b>{promo_code}</b>"
+            + "\n".join(discount_lines)
         )
     else:
         text = (
@@ -178,17 +181,18 @@ async def choose_tariff(callback: CallbackQuery, session: AsyncSession, state: F
     if tariff.is_trial and user and await dal.has_used_trial(session, user.id):
         await callback.answer("Пробный тариф — только для новых пользователей без подписки.", show_alert=True)
         return
-    if tariff.is_referral:
-        if (not user.referred_by
-                or await dal.has_any_approved_payment(session, user.id)
-                or await dal.has_used_referral_tariff(session, user.id)):
-            await callback.answer("🚫 Реферальный тариф — только для приглашённых на первый месяц.", show_alert=True)
-            return
     if not settings.payment_requisites:
         await callback.answer("Реквизиты не настроены. Обратитесь к администратору.", show_alert=True)
         return
 
-    await state.update_data(tariff_id=tariff_id, amount=float(tariff.price), promo_id=None, promo_code=None)
+    base_price = float(tariff.price)
+    referral_discount = await _is_referral_discount_eligible(session, user)
+    amount = round(base_price * (1 - settings.REFERRAL_DISCOUNT_PERCENT / 100)) if referral_discount else base_price
+
+    await state.update_data(
+        tariff_id=tariff_id, amount=amount, promo_id=None, promo_code=None,
+        referral_discount_applied=referral_discount,
+    )
     await state.set_state(PaymentSG.tariff_detail)
     text, kb = await _tariff_card(session, state)
     await edit_or_answer(callback, text, reply_markup=kb)
@@ -273,13 +277,14 @@ async def receive_screenshot(message: Message, session: AsyncSession, state: FSM
         promo_id=data.get("promo_id"),
     )
     promo_note = f"\n🎟 {data['promo_code']}" if data.get("promo_code") else ""
+    ref_note = "\n🎁 Реферальная скидка" if data.get("referral_discount_applied") else ""
     admin_text = (
         f"💳 <b>Оплата #{payment.id}</b>\n\n"
         f"👤 @{user.username or '—'} (<code>{user.telegram_id}</code>)\n"
         f"🆔 <code>{user.remnawave_username or '—'}</code>\n"
         f"📦 {tariff.name if tariff else 'доп. устройство'}"
         f"{' (' + str(tariff.duration_days) + ' дн.)' if tariff else ''}\n"
-        f"💰 {int(amount)} ₽ | {data.get('payment_method', '—')}{promo_note}"
+        f"💰 {int(amount)} ₽ | {data.get('payment_method', '—')}{promo_note}{ref_note}"
     )
     for admin_id in settings.admin_ids:
         try:

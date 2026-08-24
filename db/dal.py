@@ -226,15 +226,6 @@ async def has_used_trial(session: AsyncSession, user_id: int) -> bool:
     return row is not None
 
 
-async def has_used_referral_tariff(session: AsyncSession, user_id: int) -> bool:
-    result = await session.execute(
-        select(Payment.id)
-        .join(Tariff, Payment.tariff_id == Tariff.id)
-        .where(Payment.user_id == user_id, Payment.status == "approved", Tariff.is_referral == True)
-    )
-    return result.scalar_one_or_none() is not None
-
-
 async def has_any_approved_payment(session: AsyncSession, user_id: int) -> bool:
     result = await session.execute(
         select(Payment.id).where(Payment.user_id == user_id, Payment.status == "approved")

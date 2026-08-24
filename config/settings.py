@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # Payment
     PAYMENT_REQUISITES: str = ""
     DEVICE_SLOT_PRICE: float = 0.0
+    REFERRAL_DISCOUNT_PERCENT: float = 5.0
 
     # Notifications
     NOTIFY_EXPIRY_DAYS: str = "3,1"

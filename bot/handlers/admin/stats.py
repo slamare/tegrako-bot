@@ -35,7 +35,7 @@ async def admin_stats(callback: CallbackQuery, session: AsyncSession):
     users = await dal.count_users(session)
     revenue = await dal.get_revenue_stats(session)
     pending = await dal.get_pending_payments(session)
-    ref_days = await dal.get_setting(session, "referral_days", "0")
+    ref_rate = await dal.get_setting(session, "referral_days", "0")
     try:
         nodes = await remnawave.get_nodes()
         nodes_online = sum(1 for n in nodes if n.is_connected)
@@ -53,7 +53,7 @@ async def admin_stats(callback: CallbackQuery, session: AsyncSession):
         f"📅 Неделя: {revenue['weekly']:.0f} ₽\n"
         f"📆 Месяц: {revenue['monthly']:.0f} ₽\n"
         f"💰 Всего: {revenue['total']:.0f} ₽{reset_note}\n\n"
-        f"🎁 Бонус за реферала: <b>{ref_days} дн.</b>"
+        f"🎁 Бонус за реферала: <b>{ref_rate} дн.</b> за каждые 30 дней тарифа друга"
         f"{panel_text}"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -90,7 +90,10 @@ async def admin_reset_revenue_confirm(callback: CallbackQuery, session: AsyncSes
 async def admin_set_ref_days(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminSG.set_referral_days)
     msg = await callback.message.answer(
-        "Введите количество дней за каждого оплатившего реферала.\n\n"
+        "Введите количество бонусных дней <b>за каждые 30 дней</b> тарифа, "
+        "который оплатил приглашённый друг.\n\n"
+        "Например: 5 → купил месяц (30 дн.) — вы получите 5 дней, "
+        "купил год (365 дн.) — примерно 61 день.\n\n"
         "Введите <b>0</b> чтобы отключить бонус.",
         parse_mode="HTML",
     )
@@ -111,7 +114,7 @@ async def save_referral_days(message: Message, session: AsyncSession, state: FSM
     await dal.set_setting(session, "referral_days", str(days))
     await cleanup_fsm_interaction(message, state)
     await state.clear()
-    msg = await message.answer(f"✅ Бонус за реферала: <b>{days} дн.</b>", parse_mode="HTML")
+    msg = await message.answer(f"✅ Бонус за реферала: <b>{days} дн.</b> за каждые 30 дней тарифа друга", parse_mode="HTML")
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
 
 

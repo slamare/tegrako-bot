@@ -447,11 +447,13 @@ async def menu_invite(callback: CallbackQuery, session: AsyncSession):
     tg_id = callback.from_user.id
     bot_info = await callback.bot.get_me()
     link = f"https://t.me/{bot_info.username}?start=ref_{tg_id}"
-    ref_days = int(await dal.get_setting(session, "referral_days", "0"))
+    ref_rate = int(await dal.get_setting(session, "referral_days", "0"))
     ref_count = await dal.count_referrals(session, tg_id)
     ref_paid = await dal.get_referrals_with_payment(session, tg_id)
     bonus_text = (
-        f"\n💰 За каждого оплатившего друга — <b>+{ref_days} дней</b>. " if ref_days else ""
+        f"\n🎁 Друг получает скидку {settings.REFERRAL_DISCOUNT_PERCENT:g}% на первую покупку.\n"
+        f"💰 Вам начисляется <b>{ref_rate} дн.</b> за каждые 30 дней тарифа, который он купит."
+        if ref_rate else ""
     )
 
     await edit_or_answer(callback,
@@ -462,7 +464,7 @@ async def menu_invite(callback: CallbackQuery, session: AsyncSession):
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📤 Поделиться", switch_inline_query="invite")],
-            [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
         ]),
     )
 

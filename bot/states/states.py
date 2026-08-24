@@ -30,7 +30,6 @@ class AdminSG(StatesGroup):
     tariff_price = State()
     tariff_squad = State()
     tariff_trial = State()
-    tariff_referral = State()
 
     # Промокоды
     promo_code = State()
