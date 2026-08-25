@@ -8,6 +8,7 @@ from aiogram.types import (
     InlineQuery, InlineQueryResultArticle, InputTextMessageContent,
     ReplyKeyboardRemove, CopyTextButton,
 )
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 from cachetools import TTLCache
 import re
