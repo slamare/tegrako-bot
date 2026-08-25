@@ -302,11 +302,21 @@ async def _finish_registration(message: Message, session: AsyncSession, username
 
 # ── Подписка ──────────────────────────────────────────────────────────────────
 
+@router.callback_query(F.data == "menu_manage_sub")
+async def menu_manage_sub(callback: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Перевыпустить ссылку", callback_data="revoke_subscription")],
+        [InlineKeyboardButton(text="💳 История платежей", callback_data="payment_history")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="main_menu")],
+    ])
+    await edit_or_answer(callback, "⚙️ <b>Управление подпиской</b>", reply_markup=kb)
+
+
 @router.callback_query(F.data == "revoke_subscription")
 async def revoke_subscription_prompt(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Перевыпустить", callback_data="revoke_subscription_confirm")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="main_menu")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_manage_sub")],
     ])
     await edit_or_answer(callback,
         "⚠️ <b>Перевыпустить ссылку?</b>\n\n"
@@ -332,7 +342,7 @@ async def revoke_subscription_confirm(callback: CallbackQuery, session: AsyncSes
         "✅ <b>Ссылка перевыпущена</b>\n\nСтарая ссылка больше не действует.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔗 Открыть подписку", url=rw.subscription_url)],
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="menu_manage_sub")],
         ]),
     )
 

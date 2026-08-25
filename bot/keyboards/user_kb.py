@@ -23,8 +23,7 @@ def main_menu_kb(
         builder.button(text="📱 Устройства", callback_data="my_devices")
         if show_proxy:
             builder.button(text="📡 Telegram Proxy", callback_data="menu_proxy")
-        builder.button(text="🔄 Перевыпустить ссылку", callback_data="revoke_subscription")
-        builder.button(text="💳 История платежей", callback_data="payment_history")
+        builder.button(text="⚙️ Управление подпиской", callback_data="menu_manage_sub")
         builder.button(text="👥 Пригласить друга", callback_data="menu_invite")
         builder.button(text="💬 Поддержка", callback_data="menu_support")
     elif status == "EXPIRED":
