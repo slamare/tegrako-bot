@@ -70,7 +70,7 @@ async def restart_node(callback: CallbackQuery):
 async def admin_torrent_blocks(callback: CallbackQuery, session: AsyncSession):
     blocks = await dal.get_recent_torrent_blocks(session)
     if not blocks:
-        await edit_or_answer(callback, "✅ Блокировок не было.", reply_markup=admin_nav_kb())
+        await edit_or_answer(callback, "✅ Блокировок не было.", reply_markup=admin_nav_kb("admin_cat_infra"))
         return
     lines = ["🧲 <b>Последние торрент-блоки:</b>\n"]
     for b in blocks:
@@ -78,4 +78,4 @@ async def admin_torrent_blocks(callback: CallbackQuery, session: AsyncSession):
         lines.append(
             f"{date_str} — <code>{b.username or '—'}</code> | {b.ip or '—'} | {b.node_name or '—'}"
         )
-    await edit_or_answer(callback, "\n".join(lines), reply_markup=admin_nav_kb())
+    await edit_or_answer(callback, "\n".join(lines), reply_markup=admin_nav_kb("admin_cat_infra"))

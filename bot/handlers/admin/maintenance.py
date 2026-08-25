@@ -12,7 +12,7 @@ import logging
 
 from bot.states.states import AdminSG
 from bot.keyboards.admin_kb import (
-    admin_menu_kb, payment_approve_kb, ticket_reply_kb,
+    admin_menu_kb, admin_system_kb, payment_approve_kb, ticket_reply_kb,
     tariff_list_kb, tariff_manage_kb, nodes_kb, node_manage_kb,
     user_manage_kb, broadcast_target_kb, promo_list_kb, access_mode_kb,
 )
@@ -52,4 +52,4 @@ async def toggle_maintenance(callback: CallbackQuery, session: AsyncSession):
         except Exception:
             pass
     await callback.answer(f"{alert}. Уведомлено: {sent}", show_alert=True)
-    await callback.message.edit_reply_markup(reply_markup=admin_menu_kb(maintenance_on=new_val == "1"))
+    await callback.message.edit_reply_markup(reply_markup=admin_system_kb(maintenance_on=new_val == "1"))

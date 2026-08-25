@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
     InlineQuery, InlineQueryResultArticle, InputTextMessageContent,
-    ReplyKeyboardRemove,
+    ReplyKeyboardRemove, CopyTextButton,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from cachetools import TTLCache
@@ -15,11 +15,10 @@ import asyncio
 from datetime import datetime, timezone
 
 from bot.states.states import RegistrationSG, SupportSG
-from bot.keyboards.admin_kb import ticket_reply_kb
 from bot.services.notifications import notify_admins
 from bot.keyboards.user_kb import (
     main_menu_kb, back_kb, proxy_kb,
-    devices_kb, cancel_kb, remove_kb,
+    devices_kb, cancel_kb, remove_kb, _device_icon,
 )
 from bot.services import remnawave
 from bot.utils.helpers import (
@@ -351,16 +350,48 @@ async def my_devices(callback: CallbackQuery, session: AsyncSession):
     limit = rw.hwid_device_limit if rw else 0
     limit_str = "∞" if not limit else str(limit)
     show_buy = settings.DEVICE_SLOT_PRICE > 0
-    text = f"📱 <b>Мои устройства</b> ({len(devices)}/{limit_str})\n\n"
-    if devices:
-        for i, d in enumerate(devices, 1):
-            platform = d.platform or "Неизвестно"
-            model = d.device_model or "—"
-            text += f"{i}. {platform} — {model}\n"
-    else:
-        text += "Устройств не зарегистрировано."
-
+    text = f"📱 <b>Устройства</b>\nИспользуется: {len(devices)} / {limit_str}"
+    if not devices:
+        text += "\n\nУстройств не зарегистрировано."
     await edit_or_answer(callback, text, reply_markup=devices_kb(devices, show_buy_slot=show_buy))
+
+
+@router.callback_query(F.data.startswith("device:"))
+async def device_detail(callback: CallbackQuery, session: AsyncSession):
+    user = await dal.get_user(session, callback.from_user.id)
+    if not user or not user.remnawave_uuid:
+        await callback.answer("Подписка не найдена", show_alert=True)
+        return
+    hwid = callback.data.split(":", 1)[1]
+    devices = await remnawave.get_user_devices(user.remnawave_uuid)
+    device = next((d for d in devices if d.hwid == hwid), None)
+    if not device:
+        await callback.answer("Устройство не найдено — уже удалено", show_alert=True)
+        await my_devices(callback, session)
+        return
+    text = (
+        f"{_device_icon(device.platform)} <b>{device.platform or 'Неизвестно'}</b>\n\n"
+        f"Статус: 🟢 Активно\n"
+        f"Модель: {device.device_model or '—'}"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Удалить устройство", callback_data=f"delete_device_prompt:{hwid}")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="my_devices")],
+    ])
+    await edit_or_answer(callback, text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("delete_device_prompt:"))
+async def delete_device_prompt(callback: CallbackQuery):
+    hwid = callback.data.split(":", 1)[1]
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_device:{hwid}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"device:{hwid}")],
+    ])
+    await edit_or_answer(callback,
+        "⚠️ <b>Удалить устройство?</b>\n\nПосле удаления потребуется подключить его заново.",
+        reply_markup=kb,
+    )
 
 
 @router.callback_query(F.data.startswith("delete_device:"))
@@ -379,14 +410,17 @@ async def delete_device(callback: CallbackQuery, session: AsyncSession):
 
 
 @router.callback_query(F.data == "delete_all_devices")
-async def delete_all_devices_prompt(callback: CallbackQuery):
+async def delete_all_devices_prompt(callback: CallbackQuery, session: AsyncSession):
+    user = await dal.get_user(session, callback.from_user.id)
+    devices = await remnawave.get_user_devices(user.remnawave_uuid) if user and user.remnawave_uuid else []
+    names = "\n".join(f"• {d.platform or 'Неизвестно'}" for d in devices) or "—"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Да, удалить все", callback_data="delete_all_devices_confirm")],
+        [InlineKeyboardButton(text="🗑 Удалить все", callback_data="delete_all_devices_confirm")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="my_devices")],
     ])
     await edit_or_answer(callback,
-        "️ <b>Удалить все устройства?</b>\n\n"
-        "После этого нужно заново авторизоваться на всех устройствах.",
+        f"⚠️ <b>Удалить все устройства?</b>\n\nБудут удалены:\n{names}\n\n"
+        f"После удаления потребуется подключить их заново.",
         reply_markup=kb,
     )
 
@@ -458,13 +492,15 @@ async def menu_invite(callback: CallbackQuery, session: AsyncSession):
 
     await edit_or_answer(callback,
         f"👥 <b>Реферальная программа</b>\n\n"
+        f"Приглашайте друзей и получайте бонусы за их подписки.\n\n"
         f"Ваша ссылка:\n<code>{link}</code>"
         f"{bonus_text}\n\n"
         f"📊 Приглашено: {ref_count} | Оплатили: {len(ref_paid)}",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Скопировать ссылку", copy_text=CopyTextButton(text=link))],
             [InlineKeyboardButton(text="📤 Поделиться", switch_inline_query="invite")],
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="main_menu")],
         ]),
     )
 
@@ -501,6 +537,19 @@ async def menu_proxy(callback: CallbackQuery, session: AsyncSession):
     )
     
 @router.callback_query(F.data == "revoke_mtproxy")
+async def revoke_mtproxy_prompt(callback: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Перевыпустить", callback_data="revoke_mtproxy_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_proxy")],
+    ])
+    await edit_or_answer(callback,
+        "⚠️ <b>Перевыпустить ссылку прокси?</b>\n\n"
+        "Старая ссылка перестанет работать на подключённых устройствах.",
+        reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data == "revoke_mtproxy_confirm")
 async def revoke_mtproxy(callback: CallbackQuery, session: AsyncSession):
     from bot.services import telemt as telemt_svc
     
@@ -543,76 +592,99 @@ async def revoke_mtproxy(callback: CallbackQuery, session: AsyncSession):
 
 # ── Поддержка (вход через меню) ───────────────────────────────────────────────
 
+TICKET_STATUS_EMOJI = {"open": "🟡", "closed": "🟢"}
+
+
+def _ticket_preview(ticket) -> str:
+    first_text = next((m.text for m in ticket.messages if m.text), None) or "[без текста]"
+    return first_text[:40] + ("…" if len(first_text) > 40 else "")
+
+
 @router.callback_query(F.data == "menu_support")
-async def menu_support(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
+async def menu_support(callback: CallbackQuery, session: AsyncSession):
     user = await dal.get_user(session, callback.from_user.id)
     if not user or not user.is_registered:
         await callback.answer("Сначала зарегистрируйтесь — нажмите /start", show_alert=True)
         return
-    await state.set_state(SupportSG.waiting_message)
 
-    open_ticket = await dal.get_open_ticket(session, user.id)
+    tickets = await dal.get_user_tickets(session, user.id, limit=10)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✏️ Создать обращение", callback_data="create_ticket")
+    for t in tickets:
+        emoji = TICKET_STATUS_EMOJI.get(t.status, "⚪")
+        builder.button(text=f"{emoji} #{t.id} · {_ticket_preview(t)}", callback_data=f"view_my_ticket:{t.id}")
+    builder.button(text="◀️ Назад", callback_data="main_menu")
+    builder.adjust(1)
+
+    text = "💬 <b>Поддержка</b>\n\nЕсть вопрос или проблема?"
+    if tickets:
+        text += "\n\n<b>Ваши обращения:</b>"
+
+    await edit_or_answer(callback, text, parse_mode="HTML", reply_markup=builder.as_markup())
+
+
+@router.callback_query(F.data == "create_ticket")
+async def create_ticket_start(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
+    user = await dal.get_user(session, callback.from_user.id)
+    if not user:
+        await callback.answer()
+        return
+
+    ticket = await dal.get_open_ticket(session, user.id)
+    is_new = False
+    if not ticket:
+        ticket = await dal.create_ticket(session, user.id)
+        is_new = True
+
+    await state.set_state(SupportSG.waiting_message)
+    await state.update_data(ticket_id=ticket.id)
+
     text = (
         f"💬 <b>Поддержка</b>\n\n"
-        f"У вас уже открыт тикет #{open_ticket.id}.\n"
-        f"Напишите сообщение — оно добавится в этот тикет."
-        if open_ticket else
+        f"Тикет #{ticket.id} открыт.\n"
+        f"Опишите вашу проблему — можно приложить фото или видео.\n\n"
+        f"Чтобы закончить диалог, нажмите «Закрыть обращение» или отправьте /close"
+        if is_new else
         f"💬 <b>Поддержка</b>\n\n"
-        f"Напишите ваш вопрос — ответим как можно скорее.\n\n"
-        f"Тикет будет создан автоматически после вашего первого сообщения."
+        f"У вас уже открыт тикет #{ticket.id}.\n"
+        f"Напишите сообщение — оно добавится в этот тикет."
     )
 
     msg = await edit_or_answer(callback,
         text,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=" Меню", callback_data="main_menu")],
+            [InlineKeyboardButton(text="🔒 Закрыть обращение", callback_data="close_my_ticket")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="menu_support")],
         ]),
     )
     await state.update_data(bot_prompt_msg_id=msg.message_id if msg else None)
 
 
-@router.message(SupportSG.waiting_message, F.text)
-async def support_message(message: Message, session: AsyncSession, state: FSMContext):
-    user = await dal.get_user(session, message.from_user.id)
-    if not user:
+@router.callback_query(F.data.startswith("view_my_ticket:"))
+async def view_my_ticket(callback: CallbackQuery, session: AsyncSession):
+    user = await dal.get_user(session, callback.from_user.id)
+    ticket_id = int(callback.data.split(":")[1])
+    ticket = await dal.get_ticket_by_id(session, ticket_id)
+    if not ticket or not user or ticket.user_id != user.id:
+        await callback.answer("Обращение не найдено", show_alert=True)
         return
-    ticket = await dal.get_open_ticket(session, user.id)
-    is_new_ticket = False
-    if not ticket:
-        ticket = await dal.create_ticket(session, user.id)
-        is_new_ticket = True
 
-    await dal.add_ticket_message(
-        session, ticket_id=ticket.id, sender_role="user",
-        sender_tg_id=message.from_user.id, text=message.text,
-    )
+    emoji = TICKET_STATUS_EMOJI.get(ticket.status, "⚪")
+    status_label = "Открыт" if ticket.status == "open" else "Закрыт"
+    lines = [f"🎫 <b>Обращение #{ticket.id}</b>\nСтатус: {emoji} {status_label}\n"]
+    for m in ticket.messages[-10:]:
+        who = "👤 Вы" if m.sender_role == "user" else "🛡 Поддержка"
+        lines.append(f"{who}: {m.text or f'[{m.media_type}]'}")
 
-    await state.update_data(ticket_id=ticket.id)
+    builder = InlineKeyboardBuilder()
+    if ticket.status == "open":
+        builder.button(text="✏️ Ответить", callback_data="create_ticket")
+        builder.button(text="🔒 Закрыть обращение", callback_data="close_my_ticket")
+    builder.button(text="◀️ Назад", callback_data="menu_support")
+    builder.adjust(1)
 
-    if is_new_ticket:
-        await notify_admins(
-            message.bot,
-            f"🎫 <b>Новый тикет #{ticket.id}</b>\n\n"
-            f"👤 @{user.username or '—'} (<code>{user.telegram_id}</code>)\n"
-            f"🆔 <code>{user.remnawave_username or '—'}</code>\n\n"
-            f"💬 <b>Сообщение:</b>\n{message.text}",
-            reply_markup=ticket_reply_kb(ticket.id),
-        )
-
-    await cleanup_fsm_interaction(message, state)
-
-    msg = await message.answer(
-        f"✅ Сообщение принято! Тикет #{ticket.id}.\n\n"
-        f"Ожидайте ответа поддержки.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data="close_my_ticket")],
-            [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
-        ]),
-        disable_notification=True,
-    )
-    await state.clear()
-    asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
+    await edit_or_answer(callback, "\n".join(lines), parse_mode="HTML", reply_markup=builder.as_markup())
 
 
 @router.callback_query(F.data == "close_my_ticket")
@@ -632,11 +704,7 @@ async def close_my_ticket(callback: CallbackQuery, session: AsyncSession, state:
     await state.clear()
     await callback.answer("✅ Тикет закрыт")
 
-    user = await dal.get_user(session, callback.from_user.id)
-    uuid = user.remnawave_uuid if user else None
-    kb, status_line = await _get_menu_context(session, callback.from_user.id, uuid)
-    photo_url = settings.WELCOME_IMAGE_URL if settings.WELCOME_IMAGE_URL else None
-    await show_menu_message(callback, _welcome_text(status_line), reply_markup=kb, photo_url=photo_url)
+    await menu_support(callback, session)
 
 
 # ── Inline-режим ──────────────────────────────────────────────────────────────

@@ -13,7 +13,8 @@ import logging
 from bot.filters import AdminFilter
 from bot.states.states import AdminSG
 from bot.keyboards.admin_kb import (
-    admin_menu_kb, payment_approve_kb, ticket_reply_kb,
+    admin_menu_kb, admin_sales_kb, admin_users_section_kb, admin_infra_kb,
+    admin_comms_kb, admin_system_kb, payment_approve_kb, ticket_reply_kb,
     tariff_list_kb, tariff_manage_kb, nodes_kb, node_manage_kb,
     user_manage_kb, broadcast_target_kb, promo_list_kb, access_mode_kb,
 )
@@ -46,24 +47,58 @@ async def _mark_payment(msg: Message, approved: bool) -> None:
 
 # ── /admin ────────────────────────────────────────────────────────────────────
 
+async def _admin_counts(session: AsyncSession) -> tuple[int, int]:
+    pending = await dal.get_pending_payments(session)
+    tickets = await dal.get_open_tickets(session)
+    return len(pending), len(tickets)
+
+
 @router.message(Command("admin"))
 @router.message(F.text == "️ Администратор")
 async def admin_panel(message: Message, session: AsyncSession):
-    maintenance = await dal.get_setting(session, "maintenance", "0")
+    pending_count, tickets_count = await _admin_counts(session)
     await message.answer(
         "⚙️ <b>Панель администратора</b>", parse_mode="HTML",
-        reply_markup=admin_menu_kb(maintenance_on=maintenance == "1"),
+        reply_markup=admin_menu_kb(pending_count=pending_count, tickets_count=tickets_count),
     )
 
 
 @router.callback_query(F.data == "admin_menu")
 async def admin_menu_cb(callback: CallbackQuery, session: AsyncSession):
-    maintenance = await dal.get_setting(session, "maintenance", "0")
+    pending_count, tickets_count = await _admin_counts(session)
     await edit_or_answer(
         callback,
         "⚙️ <b>Панель администратора</b>",
-        reply_markup=admin_menu_kb(maintenance_on=maintenance == "1"),
+        reply_markup=admin_menu_kb(pending_count=pending_count, tickets_count=tickets_count),
     )
+
+
+@router.callback_query(F.data == "admin_cat_sales")
+async def admin_cat_sales(callback: CallbackQuery, session: AsyncSession):
+    pending_count, _ = await _admin_counts(session)
+    await edit_or_answer(callback, "💰 <b>Продажи</b>", reply_markup=admin_sales_kb(pending_count=pending_count))
+
+
+@router.callback_query(F.data == "admin_cat_users")
+async def admin_cat_users(callback: CallbackQuery, session: AsyncSession):
+    _, tickets_count = await _admin_counts(session)
+    await edit_or_answer(callback, "👥 <b>Пользователи</b>", reply_markup=admin_users_section_kb(tickets_count=tickets_count))
+
+
+@router.callback_query(F.data == "admin_cat_infra")
+async def admin_cat_infra(callback: CallbackQuery):
+    await edit_or_answer(callback, "🖥 <b>Инфраструктура</b>", reply_markup=admin_infra_kb())
+
+
+@router.callback_query(F.data == "admin_cat_comms")
+async def admin_cat_comms(callback: CallbackQuery):
+    await edit_or_answer(callback, "📣 <b>Коммуникации</b>", reply_markup=admin_comms_kb())
+
+
+@router.callback_query(F.data == "admin_cat_system")
+async def admin_cat_system(callback: CallbackQuery, session: AsyncSession):
+    maintenance = await dal.get_setting(session, "maintenance", "0")
+    await edit_or_answer(callback, "⚙️ <b>Система</b>", reply_markup=admin_system_kb(maintenance_on=maintenance == "1"))
 
 
 # ── Статистика ────────────────────────────────────────────────────────────────
@@ -75,12 +110,12 @@ async def admin_menu_cb(callback: CallbackQuery, session: AsyncSession):
 async def admin_pending_payments(callback: CallbackQuery, session: AsyncSession):
     payments = await dal.get_pending_payments(session)
     if not payments:
-        await edit_or_answer(callback, "✅ Нет ожидающих оплат.", reply_markup=admin_nav_kb())
+        await edit_or_answer(callback, "✅ Нет ожидающих оплат.", reply_markup=admin_nav_kb("admin_cat_sales"))
         return
     await edit_or_answer(
         callback,
         f"⏳ Ожидающих: {len(payments)}. Карточки ниже 👇",
-        reply_markup=admin_nav_kb(),
+        reply_markup=admin_nav_kb("admin_cat_sales"),
     )
     for p in payments:
         u, t = p.user, p.tariff

@@ -80,6 +80,12 @@ async def count_referrals(session: AsyncSession, telegram_id: int) -> int:
     ) or 0
 
 
+async def count_user_payments(session: AsyncSession, user_id: int) -> int:
+    return await session.scalar(
+        select(func.count(Payment.id)).where(Payment.user_id == user_id, Payment.status == "approved")
+    ) or 0
+
+
 async def get_referrals_with_payment(session: AsyncSession, telegram_id: int) -> list[User]:
     result = await session.execute(
         select(User)
@@ -361,6 +367,16 @@ async def get_closed_tickets(
     if user_id:
         q = q.where(SupportTicket.user_id == user_id)
     result = await session.execute(q.order_by(SupportTicket.updated_at.desc()).limit(limit))
+    return result.scalars().all()
+
+
+async def get_user_tickets(session: AsyncSession, user_id: int, limit: int = 10) -> list[SupportTicket]:
+    result = await session.execute(
+        select(SupportTicket)
+        .where(SupportTicket.user_id == user_id)
+        .order_by(SupportTicket.updated_at.desc())
+        .limit(limit)
+    )
     return result.scalars().all()
 
 

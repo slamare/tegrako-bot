@@ -71,14 +71,20 @@ def cancel_kb(back_cb: str = "main_menu") -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="❌ Отмена", callback_data=back_cb)]
     ])
 
+def _device_icon(platform: str | None) -> str:
+    p = (platform or "").lower()
+    if any(k in p for k in ("windows", "macos", "linux", "mac os")):
+        return "🖥"
+    if p:
+        return "📱"
+    return "📶"
+
+
 def devices_kb(devices: list, show_buy_slot: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for i, d in enumerate(devices, 1):
-        platform = d.platform or "Неизвестно"
-        builder.button(
-            text=f"🗑 Удалить {i}. {platform}",
-            callback_data=f"delete_device:{d.hwid}",
-        )
+    for d in devices:
+        label = d.platform or d.device_model or "Устройство"
+        builder.button(text=f"{_device_icon(d.platform)} {label}", callback_data=f"device:{d.hwid}")
     if devices:
         builder.button(text="🗑 Удалить все", callback_data="delete_all_devices")
     if show_buy_slot:
@@ -91,5 +97,5 @@ def proxy_kb(proxy_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔗 Подключить прокси", url=proxy_url)],
         [InlineKeyboardButton(text="🔄 Перевыпустить ссылку", callback_data="revoke_mtproxy")],
-        [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="main_menu")],
     ])

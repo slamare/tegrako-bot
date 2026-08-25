@@ -40,7 +40,7 @@ async def admin_custom_buttons(callback: CallbackQuery, session: AsyncSession):
             callback_data=f"admin_custbtn:{btn.id}",
         )
     builder.button(text="➕ Добавить кнопку", callback_data="admin_add_custbtn")
-    builder.button(text="◀️ Назад", callback_data="admin_menu")
+    builder.button(text="◀️ Назад", callback_data="admin_cat_comms")
     builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
     await edit_or_answer(

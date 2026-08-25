@@ -57,9 +57,9 @@ async def admin_stats(callback: CallbackQuery, session: AsyncSession):
         f"{panel_text}"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="️ Изменить бонус за реферала", callback_data="admin_set_ref_days")],
+        [InlineKeyboardButton(text="✏️ Изменить бонус за реферала", callback_data="admin_set_ref_days")],
         [InlineKeyboardButton(text="🗑 Сбросить выручку", callback_data="admin_reset_revenue")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_cat_sales")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
     await edit_or_answer(callback, text, reply_markup=kb)

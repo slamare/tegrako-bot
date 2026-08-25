@@ -40,7 +40,7 @@ async def admin_tickets(callback: CallbackQuery, session: AsyncSession):
             callback_data=f"view_ticket:{t.id}",
         )
     builder.button(text="📁 Закрытые тикеты", callback_data="admin_closed_tickets")
-    builder.button(text="◀️ Назад", callback_data="admin_menu")
+    builder.button(text="◀️ Назад", callback_data="admin_cat_users")
     builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
     header = f"🎫 <b>Открытые тикеты: {len(tickets)}</b>" if tickets else "✅ Открытых тикетов нет."

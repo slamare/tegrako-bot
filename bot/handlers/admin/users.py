@@ -41,7 +41,7 @@ async def admin_users(callback: CallbackQuery, session: AsyncSession):
         )
     builder.button(text="🔍 Поиск", callback_data="admin_search_user")
     builder.button(text="🚫 Забаненные", callback_data="admin_banned_users")
-    builder.button(text="◀️ Назад", callback_data="admin_menu")
+    builder.button(text="◀️ Назад", callback_data="admin_cat_users")
     builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
     await edit_or_answer(callback, f"👥 <b>Пользователи ({len(users)})</b>", reply_markup=builder.as_markup())
@@ -95,27 +95,40 @@ async def view_user(callback: CallbackQuery, session: AsyncSession):
     if not user:
         await callback.answer("Не найден", show_alert=True)
         return
-    sub_info = "—"
+
+    status_emoji = "⚪"
+    sub_info = "Нет подписки"
+    devices_info = ""
     if user.remnawave_uuid:
         try:
             rw = await remnawave.get_subscription_info(user.remnawave_uuid)
             if rw:
+                status_emoji = {"ACTIVE": "🟢", "EXPIRED": "🔴", "DISABLED": "⚫"}.get(rw.status.value, "⚪")
                 sub_info = f"{rw.status.value} до {rw.expire_at.strftime('%d.%m.%Y')}"
+                devices = await remnawave.get_user_devices(user.remnawave_uuid)
+                limit_str = str(rw.hwid_device_limit) if rw.hwid_device_limit else "∞"
+                devices_info = f"\n📱 Устройства: {len(devices)} / {limit_str}"
         except Exception:
-            pass
+            sub_info = "⚠️ не удалось получить данные"
+
+    payments_count = await dal.count_user_payments(session, user.id)
     ref_count = await dal.count_referrals(session, tg_id)
     ref_paid = await dal.get_referrals_with_payment(session, tg_id)
     referrer_info = f"\nПривёл: <code>{user.referred_by}</code>" if user.referred_by else ""
-    slots_info = f"\n📱 Доп. слоты: {user.extra_device_slots}" if user.extra_device_slots else ""
-    role_icon = {"developer": "‍💻", "admin": "⚙️", "user": "👤"}.get(user.role, "👤")
+    slots_info = f"\n➕ Доп. слоты: {user.extra_device_slots}" if user.extra_device_slots else ""
+    role_icon = {"developer": "👨‍💻", "admin": "⚙️", "user": "👤"}.get(user.role, "👤")
+
     await edit_or_answer(
         callback,
-        f"{role_icon} TG: <code>{tg_id}</code> | @{user.username or '—'}\n"
-        f"Аккаунт: <code>{user.remnawave_username or '—'}</code>\n"
-        f"Подписка: {sub_info}\n"
+        f"{role_icon} <b>Пользователь</b>\n"
+        f"@{user.username or '—'} | ID: <code>{tg_id}</code>\n"
+        f"Аккаунт: <code>{user.remnawave_username or '—'}</code>\n\n"
+        f"{status_emoji} Подписка: {sub_info}"
+        f"{devices_info}\n"
+        f"💰 Платежей: {payments_count}\n"
+        f"👥 Рефералов: {ref_count} (оплатили: {len(ref_paid)})\n"
         f"Забанен: {'🚫 Да' if user.is_banned else '✅ Нет'}"
-        f"{slots_info}\n"
-        f"👥 Рефералов: {ref_count} (оплатили: {len(ref_paid)})"
+        f"{slots_info}"
         f"{referrer_info}\n"
         f"С: {user.created_at.strftime('%d.%m.%Y')}",
         reply_markup=user_manage_kb(tg_id, user.is_banned, user.remnawave_uuid),

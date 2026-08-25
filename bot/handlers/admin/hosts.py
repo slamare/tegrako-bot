@@ -42,7 +42,7 @@ async def admin_inbounds(callback: CallbackQuery):
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🌐 Хосты", callback_data="admin_hosts")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_cat_infra")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
     await edit_or_answer(callback, f"🔌 <b>Инбаунды ({len(inbounds)})</b>\n\n" + "\n\n".join(lines), reply_markup=kb)
@@ -60,7 +60,7 @@ async def admin_hosts(callback: CallbackQuery):
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔌 Инбаунды", callback_data="admin_inbounds")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_cat_infra")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ])
     await edit_or_answer(callback, f"🌐 <b>Хосты ({len(hosts)})</b>\n\n" + "\n\n".join(lines), reply_markup=kb)
