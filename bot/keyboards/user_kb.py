@@ -46,23 +46,43 @@ def back_kb(callback_data: str = "main_menu") -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="◀️ Назад", callback_data=callback_data)]
     ])
 
-def tariffs_kb(tariffs: list[Tariff]) -> InlineKeyboardMarkup:
+def _strike(text: str) -> str:
+    return "".join(ch + "\u0336" for ch in text)
+
+
+def _price_label(price: float, discount_percent: float) -> str:
+    base = int(price)
+    if discount_percent > 0:
+        discounted = round(base * (1 - discount_percent / 100))
+        return f"{_strike(str(base))} {discounted} ₽"
+    return f"{base} ₽"
+
+
+def tariffs_kb(tariffs: list[Tariff], discount_percent: float = 0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for t in tariffs:
         badge = "🎁 " if t.is_trial else ""
-        builder.button(text=f"{badge}{t.name} · {int(t.price)} ₽", callback_data=f"tariff:{t.id}")
+        builder.button(
+            text=f"{badge}{t.name} · {_price_label(t.price, discount_percent)}",
+            callback_data=f"tariff:{t.id}",
+        )
     builder.button(text="◀️ Назад", callback_data="main_menu")
     builder.adjust(1)
     return builder.as_markup()
 
 
-def tariffs_list_text(tariffs: list[Tariff]) -> str:
+def tariffs_list_text(tariffs: list[Tariff], discount_percent: float = 0) -> str:
     lines = ["📦 <b>Выберите тариф:</b>\n"]
+    if discount_percent > 0:
+        lines[0] += f"\n🎁 Скидка {discount_percent:g}% на первую покупку уже учтена в ценах\n"
     for t in tariffs:
         badge = "🎁 " if t.is_trial else ""
         traffic = f"{t.traffic_limit_gb} ГБ" if t.traffic_limit_gb else "Безлимит"
         devices = f"{t.device_limit} уст." if t.device_limit else "∞ уст."
-        lines.append(f"{badge}<b>{t.name}</b> — {int(t.price)} ₽\n{t.duration_days} дн. · {traffic} · {devices}\n")
+        lines.append(
+            f"{badge}<b>{t.name}</b> — {_price_label(t.price, discount_percent)}\n"
+            f"{t.duration_days} дн. · {traffic} · {devices}\n"
+        )
     return "\n".join(lines)
 
 def cancel_kb(back_cb: str = "main_menu") -> InlineKeyboardMarkup:

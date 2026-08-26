@@ -166,7 +166,8 @@ async def menu_buy(callback: CallbackQuery, session: AsyncSession, state: FSMCon
     if not tariffs:
         await callback.answer("Тарифы временно недоступны.", show_alert=True)
         return
-    await edit_or_answer(callback, tariffs_list_text(tariffs), reply_markup=tariffs_kb(tariffs))
+    discount = settings.REFERRAL_DISCOUNT_PERCENT if await _is_referral_discount_eligible(session, user) else 0
+    await edit_or_answer(callback, tariffs_list_text(tariffs, discount), reply_markup=tariffs_kb(tariffs, discount))
     await state.set_state(PaymentSG.choose_tariff)
 
 
@@ -369,7 +370,8 @@ async def renew_subscription(callback: CallbackQuery, session: AsyncSession, sta
     if not tariffs:
         await callback.answer("Тарифы временно недоступны", show_alert=True)
         return
-    await edit_or_answer(callback, tariffs_list_text(tariffs), reply_markup=tariffs_kb(tariffs))
+    discount = settings.REFERRAL_DISCOUNT_PERCENT if await _is_referral_discount_eligible(session, user) else 0
+    await edit_or_answer(callback, tariffs_list_text(tariffs, discount), reply_markup=tariffs_kb(tariffs, discount))
     await state.set_state(PaymentSG.choose_tariff)
 
 
