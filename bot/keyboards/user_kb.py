@@ -46,26 +46,19 @@ def back_kb(callback_data: str = "main_menu") -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="◀️ Назад", callback_data=callback_data)]
     ])
 
-def _strike(text: str) -> str:
-    return "".join(ch + "\u0336" for ch in text)
-
-
-def _price_label(price: float, discount_percent: float) -> str:
+def _final_price(price: float, discount_percent: float) -> int:
     base = int(price)
     if discount_percent > 0:
-        discounted = round(base * (1 - discount_percent / 100))
-        return f"{_strike(str(base))} {discounted} ₽"
-    return f"{base} ₽"
+        return round(base * (1 - discount_percent / 100))
+    return base
 
 
 def tariffs_kb(tariffs: list[Tariff], discount_percent: float = 0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for t in tariffs:
         badge = "🎁 " if t.is_trial else ""
-        builder.button(
-            text=f"{badge}{t.name} · {_price_label(t.price, discount_percent)}",
-            callback_data=f"tariff:{t.id}",
-        )
+        price = _final_price(t.price, discount_percent)
+        builder.button(text=f"{badge}{t.name} · {price} ₽", callback_data=f"tariff:{t.id}")
     builder.button(text="◀️ Назад", callback_data="main_menu")
     builder.adjust(1)
     return builder.as_markup()
@@ -79,8 +72,13 @@ def tariffs_list_text(tariffs: list[Tariff], discount_percent: float = 0) -> str
         badge = "🎁 " if t.is_trial else ""
         traffic = f"{t.traffic_limit_gb} ГБ" if t.traffic_limit_gb else "Безлимит"
         devices = f"{t.device_limit} уст." if t.device_limit else "∞ уст."
+        base = int(t.price)
+        if discount_percent > 0:
+            price_str = f"<s>{base}</s> {_final_price(t.price, discount_percent)} ₽"
+        else:
+            price_str = f"{base} ₽"
         lines.append(
-            f"{badge}<b>{t.name}</b> — {_price_label(t.price, discount_percent)}\n"
+            f"{badge}<b>{t.name}</b> — {price_str}\n"
             f"{t.duration_days} дн. · {traffic} · {devices}\n"
         )
     return "\n".join(lines)
