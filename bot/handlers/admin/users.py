@@ -30,21 +30,60 @@ router = Router()
 
 # ── Пользователи ──────────────────────────────────────────────────────────────
 
+USERS_PAGE_SIZE = 10
+
+
+def _user_label(u) -> str:
+    if u.username:
+        return f"@{u.username}"
+    if u.remnawave_username:
+        return u.remnawave_username
+    return f"ID {u.telegram_id}"
+
+
+async def _render_users_page(session: AsyncSession, page: int):
+    counts = await dal.count_users(session)
+    total = counts["registered"]
+    total_pages = max(1, (total + USERS_PAGE_SIZE - 1) // USERS_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    users = await dal.get_users_page(session, offset=page * USERS_PAGE_SIZE, limit=USERS_PAGE_SIZE)
+
+    rows = [[InlineKeyboardButton(text=_user_label(u), callback_data=f"admin_user:{u.telegram_id}")] for u in users]
+
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"admin_users_page:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="admin_noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"admin_users_page:{page + 1}"))
+        rows.append(nav)
+
+    rows.append([InlineKeyboardButton(text="🔍 Поиск", callback_data="admin_search_user")])
+    rows.append([InlineKeyboardButton(text="🚫 Забаненные", callback_data="admin_banned_users")])
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_cat_users")])
+    rows.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")])
+
+    text = f"👥 <b>Пользователи ({total})</b>\nСтраница {page + 1} из {total_pages}"
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data == "admin_noop")
+async def admin_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
 @router.callback_query(F.data == "admin_users")
 async def admin_users(callback: CallbackQuery, session: AsyncSession):
-    users = await dal.get_all_users(session, only_registered=True)
-    builder = InlineKeyboardBuilder()
-    for u in users[:20]:
-        builder.button(
-            text=f"@{u.username or '—'} | {u.remnawave_username or '?'}",
-            callback_data=f"admin_user:{u.telegram_id}",
-        )
-    builder.button(text="🔍 Поиск", callback_data="admin_search_user")
-    builder.button(text="🚫 Забаненные", callback_data="admin_banned_users")
-    builder.button(text="◀️ Назад", callback_data="admin_cat_users")
-    builder.button(text="🏠 Главное меню", callback_data="main_menu")
-    builder.adjust(1)
-    await edit_or_answer(callback, f"👥 <b>Пользователи ({len(users)})</b>", reply_markup=builder.as_markup())
+    text, kb = await _render_users_page(session, 0)
+    await edit_or_answer(callback, text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("admin_users_page:"))
+async def admin_users_page(callback: CallbackQuery, session: AsyncSession):
+    page = int(callback.data.split(":")[1])
+    text, kb = await _render_users_page(session, page)
+    await edit_or_answer(callback, text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "admin_search_user")
@@ -65,10 +104,7 @@ async def admin_search_user(message: Message, session: AsyncSession, state: FSMC
         return
     builder = InlineKeyboardBuilder()
     for u in users:
-        builder.button(
-            text=f"@{u.username or '—'} | {u.remnawave_username or '?'}",
-            callback_data=f"admin_user:{u.telegram_id}",
-        )
+        builder.button(text=_user_label(u), callback_data=f"admin_user:{u.telegram_id}")
     builder.adjust(1)
     msg = await message.answer(f"🔍 Найдено: {len(users)}", reply_markup=builder.as_markup())
     await state.clear()
@@ -80,7 +116,7 @@ async def admin_banned_users(callback: CallbackQuery, session: AsyncSession):
     users = await dal.get_banned_users(session)
     builder = InlineKeyboardBuilder()
     for u in users:
-        builder.button(text=f"🚫 @{u.username or u.telegram_id}", callback_data=f"admin_user:{u.telegram_id}")
+        builder.button(text=f"🚫 {_user_label(u)}", callback_data=f"admin_user:{u.telegram_id}")
     builder.button(text="◀️ Назад", callback_data="admin_users")
     builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)

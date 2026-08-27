@@ -62,6 +62,18 @@ async def get_all_users(session: AsyncSession, only_registered: bool = False) ->
     return result.scalars().all()
 
 
+async def get_users_page(
+    session: AsyncSession, offset: int = 0, limit: int = 10, only_registered: bool = True
+) -> list[User]:
+    q = select(User)
+    if only_registered:
+        q = q.where(User.is_registered == True)
+    order_key = func.lower(func.coalesce(User.username, User.remnawave_username, ""))
+    q = q.order_by(order_key).offset(offset).limit(limit)
+    result = await session.execute(q)
+    return result.scalars().all()
+
+
 async def get_banned_users(session: AsyncSession) -> list[User]:
     result = await session.execute(select(User).where(User.is_banned == True))
     return result.scalars().all()
