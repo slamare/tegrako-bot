@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     ADMIN_GRANT_SQUAD_UUID: Optional[str] = None
 
     # Bot UI
-    BOT_NAME: str = "TegraVPN"
+    BOT_NAME: str = "TegrakoVPN"
     WELCOME_IMAGE_URL: Optional[str] = None
     SUPPORT_LINK: Optional[str] = None
 

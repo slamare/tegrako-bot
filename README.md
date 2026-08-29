@@ -67,6 +67,7 @@ Telegram-бот для TegrakoVPN на базе Remnawave. Управляет п
 │   ├── models.py
 │   └── dal.py
 ├── main.py
+├── install.sh
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example
@@ -93,7 +94,20 @@ git clone https://github.com/slamare/tegrako-bot
 cd tegrako-bot
 ```
 
-### 3. `.env`
+### 3. Быстрая установка
+
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+Скрипт по шагам спросит токен бота, ID админа, данные панели Remnawave и настройки оплаты, сам сгенерирует `POSTGRES_PASSWORD` и `WEBHOOK_SECRET`, создаст docker-сеть `remnawave-network`, если её нет, запишет `.env` и предложит сразу поднять контейнеры (`docker compose up -d --build`).
+
+Секрет вебхука скрипт выведет в конце — его нужно вставить в настройки Webhook в Remnawave (см. раздел [Вебхуки Remnawave](#вебхуки-remnawave)).
+
+Если `.env` уже существует, скрипт спросит, перезаписывать его или нет — можно гонять его повторно только чтобы пересоздать сеть и поднять контейнеры.
+
+### 4. Ручная установка (если нужен полный контроль)
 
 ```bash
 cp .env.example .env
@@ -125,36 +139,29 @@ WEBHOOK_SECRET=
 WEBHOOK_PORT=9090
 ```
 
+`POSTGRES_PASSWORD` должен состоять только из букв/цифр/`-_.` — он подставляется прямо в `DATABASE_URL` без URL-кодирования, символы вроде `@ : / ?` сломают строку подключения.
+
 Опциональные:
 
 ```env
 WELCOME_IMAGE_URL=
+
+# Сквад для тарифов, назначенных админом без оплаты (иначе используется DEFAULT_SQUAD_UUID)
+ADMIN_GRANT_SQUAD_UUID=
+
 DEVICE_SLOT_PRICE=0
+REFERRAL_DISCOUNT_PERCENT=5
 
 # MTProto прокси (telemt)
-TELEMT_CONFIG_PATH=/opt/telemt/config/telemt.toml
 TELEMT_API_URL=http://host.docker.internal:9091
 TELEMT_PUBLIC_HOST=
 TELEMT_PUBLIC_PORT=8443
 ```
 
-### 4. Docker network
-
-Бот должен быть в одной сети с Remnawave:
+Дальше — сеть и запуск:
 
 ```bash
-docker network ls | grep remnawave-network
-```
-
-Если нет:
-
-```bash
-docker network create remnawave-network
-```
-
-### 5. Запуск
-
-```bash
+docker network ls | grep remnawave-network || docker network create remnawave-network
 docker compose up -d --build
 ```
 

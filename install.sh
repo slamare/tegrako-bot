@@ -84,7 +84,13 @@ if [ -z "${SKIP_ENV:-}" ]; then
         POSTGRES_PASSWORD=$(random_hex 24)
         info "Пароль сгенерирован."
     else
-        POSTGRES_PASSWORD=$(ask_required "Пароль для Postgres")
+        while true; do
+            POSTGRES_PASSWORD=$(ask_required "Пароль для Postgres (только буквы, цифры, - _ .)")
+            if [[ "$POSTGRES_PASSWORD" =~ ^[A-Za-z0-9._-]+$ ]]; then
+                break
+            fi
+            warn "Символы вроде @ : / ? # ломают строку подключения к базе. Используй только буквы, цифры, - _ ."
+        done
     fi
     DATABASE_URL="postgresql+asyncpg://tegrakobot:${POSTGRES_PASSWORD}@db:5432/tegrakobot"
 
