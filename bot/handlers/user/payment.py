@@ -191,7 +191,7 @@ async def choose_tariff(callback: CallbackQuery, session: AsyncSession, state: F
     amount = round(base_price * (1 - settings.REFERRAL_DISCOUNT_PERCENT / 100)) if referral_discount else base_price
 
     await state.update_data(
-        tariff_id=tariff_id, amount=amount, promo_id=None, promo_code=None,
+        tariff_id=tariff_id, base_amount=base_price, amount=amount, promo_id=None, promo_code=None,
         referral_discount_applied=referral_discount,
     )
     await state.set_state(PaymentSG.tariff_detail)
@@ -226,21 +226,29 @@ async def proceed_to_payment(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(PaymentSG.tariff_detail, F.data == "enter_promo")
 async def enter_promo_start(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    note = "\n\n⚠️ Промокод заменит реферальную скидку — скидки не суммируются." if data.get("referral_discount_applied") else ""
     await state.set_state(PaymentSG.enter_promo)
-    await edit_or_answer(callback, "🎟 Введите промокод:", reply_markup=cancel_kb("back_to_tariff_detail"))
+    await edit_or_answer(callback, f"🎟 Введите промокод:{note}", reply_markup=cancel_kb("back_to_tariff_detail"))
 
 
 @router.message(PaymentSG.enter_promo, F.text)
 async def apply_promo(message: Message, session: AsyncSession, state: FSMContext):
     data = await state.get_data()
-    promo, error = await dal.validate_promo(session, message.text.strip(), data.get("tariff_id"))
+    user = await dal.get_user(session, message.from_user.id)
+    promo, error = await dal.validate_promo(session, message.text.strip(), data.get("tariff_id"), user)
     await cleanup_fsm_interaction(message, state)
     if error:
         msg = await message.answer(f"❌ {error}", disable_notification=True)
         asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
         return
-    new_amount = dal.apply_promo_discount(promo, data.get("amount", 0))
-    await state.update_data(amount=new_amount, promo_id=promo.id, promo_code=promo.code)
+    # Промокод не суммируется с реферальной скидкой — считаем от полной цены и заменяем скидку.
+    base_price = data.get("base_amount", data.get("amount", 0))
+    new_amount = dal.apply_promo_discount(promo, base_price)
+    await state.update_data(
+        amount=new_amount, promo_id=promo.id, promo_code=promo.code,
+        referral_discount_applied=False,
+    )
     await state.set_state(PaymentSG.tariff_detail)
     text, kb = await _tariff_card(session, state)
     await message.answer(text, parse_mode="HTML", disable_notification=True, reply_markup=kb)

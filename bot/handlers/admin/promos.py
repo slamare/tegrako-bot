@@ -15,6 +15,7 @@ from bot.keyboards.admin_kb import (
     admin_menu_kb, payment_approve_kb, ticket_reply_kb,
     tariff_list_kb, tariff_manage_kb, nodes_kb, node_manage_kb,
     user_manage_kb, broadcast_target_kb, promo_list_kb, access_mode_kb,
+    promo_target_kb,
 )
 from bot.keyboards.user_kb import main_menu_kb
 from bot.services import remnawave
@@ -89,6 +90,36 @@ async def promo_discount(message: Message, state: FSMContext):
             await state.update_data(bot_prompt_msg_id=msg.message_id)
             return
     await cleanup_fsm_interaction(message, state)
+    await state.set_state(AdminSG.promo_target)
+    msg = await message.answer("Для кого промокод?", reply_markup=promo_target_kb())
+    await state.update_data(bot_prompt_msg_id=msg.message_id)
+
+
+@router.callback_query(AdminSG.promo_target, F.data.startswith("promo_target:"))
+async def promo_target(callback: CallbackQuery, state: FSMContext):
+    target = callback.data.split(":")[1]
+    await state.update_data(target_type=target)
+    if target == "inactive":
+        await state.set_state(AdminSG.promo_inactive_days)
+        await edit_or_answer(callback, "Через сколько дней без продления промокод становится доступен?\n\nВведите число дней:")
+    else:
+        await state.set_state(AdminSG.promo_max_uses)
+        await edit_or_answer(callback, "Введите <b>максимальное количество использований</b>:")
+    await callback.answer()
+
+
+@router.message(AdminSG.promo_inactive_days, F.text)
+async def promo_inactive_days(message: Message, state: FSMContext):
+    try:
+        days = int(message.text.strip())
+        assert days > 0
+    except Exception:
+        await cleanup_fsm_interaction(message, state)
+        msg = await message.answer("❌ Введите целое число > 0:")
+        await state.update_data(bot_prompt_msg_id=msg.message_id)
+        return
+    await cleanup_fsm_interaction(message, state)
+    await state.update_data(inactive_days=days)
     await state.set_state(AdminSG.promo_max_uses)
     msg = await message.answer("Введите <b>максимальное количество использований</b>:", parse_mode="HTML")
     await state.update_data(bot_prompt_msg_id=msg.message_id)
@@ -110,8 +141,9 @@ async def promo_max_uses(message: Message, session: AsyncSession, state: FSMCont
     await state.clear()
     await cleanup_fsm_interaction(message, state)
     disc = f"{promo.discount_percent}%" if promo.discount_percent else f"{int(promo.discount_fixed)} ₽"
+    target_label = {"all": "все", "new": "новые", "inactive": f"неактивные {promo.inactive_days}+ дн."}.get(promo.target_type, promo.target_type)
     msg = await message.answer(
-        f"✅ Промокод <b>{promo.code}</b> создан!\nСкидка: {disc} | Использований: 0/{uses}",
+        f"✅ Промокод <b>{promo.code}</b> создан!\nСкидка: {disc} | Аудитория: {target_label} | Использований: 0/{uses}",
         parse_mode="HTML",
     )
     asyncio.create_task(delete_later(message.bot, message.chat.id, msg.message_id, 30))
@@ -127,6 +159,11 @@ async def view_promo(callback: CallbackQuery, session: AsyncSession):
         return
     disc = f"{promo.discount_percent}%" if promo.discount_percent else f"{int(promo.discount_fixed)} ₽"
     expires = promo.expires_at.strftime("%d.%m.%Y") if promo.expires_at else "бессрочно"
+    target_label = {
+        "all": "все пользователи",
+        "new": "только новые (без покупок)",
+        "inactive": f"не продлевали {promo.inactive_days}+ дн.",
+    }.get(promo.target_type, promo.target_type)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="❌ Деактивировать" if promo.is_active else "✅ Активировать",
@@ -140,6 +177,7 @@ async def view_promo(callback: CallbackQuery, session: AsyncSession):
         callback,
         f"🎟 <b>{promo.code}</b>\n"
         f"Скидка: {disc}\n"
+        f"Аудитория: {target_label}\n"
         f"Использований: {promo.used_count}/{promo.max_uses}\n"
         f"Действует до: {expires}\n"
         f"Статус: {'✅ Активен' if promo.is_active else '❌ Неактивен'}",

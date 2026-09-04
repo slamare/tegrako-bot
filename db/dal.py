@@ -258,8 +258,18 @@ async def get_promo_by_code(session: AsyncSession, code: str) -> Optional[PromoC
     return result.scalar_one_or_none()
 
 
+async def get_last_approved_payment(session: AsyncSession, user_id: int) -> Optional[Payment]:
+    result = await session.execute(
+        select(Payment)
+        .where(Payment.user_id == user_id, Payment.status == "approved")
+        .order_by(Payment.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def validate_promo(
-    session: AsyncSession, code: str, tariff_id: int
+    session: AsyncSession, code: str, tariff_id: int, user: User,
 ) -> tuple[Optional[PromoCode], Optional[str]]:
     promo = await get_promo_by_code(session, code)
     if not promo:
@@ -272,6 +282,18 @@ async def validate_promo(
         return None, "Промокод исчерпан."
     if promo.tariff_id and promo.tariff_id != tariff_id:
         return None, "Промокод не применяется к этому тарифу."
+
+    if promo.target_type == "new":
+        if await has_any_approved_payment(session, user.id):
+            return None, "Промокод только для новых пользователей."
+    elif promo.target_type == "inactive":
+        last_payment = await get_last_approved_payment(session, user.id)
+        if not last_payment:
+            return None, "Промокод только для ранее оплачивавших пользователей."
+        days_since = (datetime.utcnow() - last_payment.created_at).days
+        if days_since < (promo.inactive_days or 0):
+            return None, "Промокод пока недоступен — вы недавно продлевали подписку."
+
     return promo, None
 
 
@@ -293,7 +315,10 @@ async def use_promo(session: AsyncSession, promo_id: int) -> None:
 
 
 async def create_promo(session: AsyncSession, **kwargs) -> PromoCode:
-    allowed = {"code", "discount_percent", "discount_fixed", "tariff_id", "max_uses", "expires_at", "is_active"}
+    allowed = {
+        "code", "discount_percent", "discount_fixed", "tariff_id",
+        "target_type", "inactive_days", "max_uses", "expires_at", "is_active",
+    }
     data = {k: v for k, v in kwargs.items() if k in allowed}
     if "code" in data:
         data["code"] = data["code"].upper()

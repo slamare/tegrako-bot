@@ -82,6 +82,8 @@ class PromoCode(Base):
     discount_percent: Mapped[int] = mapped_column(Integer, default=0)   # 0–100
     discount_fixed: Mapped[float] = mapped_column(Numeric(10, 2), default=0)  # фиксированная скидка в ₽
     tariff_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tariffs.id"), nullable=True)  # None = для любого тарифа
+    target_type: Mapped[str] = mapped_column(String(16), default="all")  # all / new / inactive
+    inactive_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # для target_type=inactive
     max_uses: Mapped[int] = mapped_column(Integer, default=1)
     used_count: Mapped[int] = mapped_column(Integer, default=0)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

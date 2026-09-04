@@ -109,13 +109,17 @@ def tariff_manage_kb(
     ])
 
 
+_PROMO_TARGET_BADGE = {"new": " 🆕", "inactive": " 💤"}
+
+
 def promo_list_kb(promos: list[PromoCode]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for p in promos:
         status = "✅ " if p.is_active else "❌ "
         disc = f"{p.discount_percent}%" if p.discount_percent else f"{int(p.discount_fixed)} ₽"
+        badge = _PROMO_TARGET_BADGE.get(p.target_type, "")
         builder.button(
-            text=f"{status}{p.code} — {disc} ({p.used_count}/{p.max_uses})",
+            text=f"{status}{p.code} — {disc} ({p.used_count}/{p.max_uses}){badge}",
             callback_data=f"admin_promo:{p.id}",
         )
     builder.button(text="➕ Создать промокод", callback_data="admin_create_promo")
@@ -123,6 +127,14 @@ def promo_list_kb(promos: list[PromoCode]) -> InlineKeyboardMarkup:
     builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1)
     return builder.as_markup()
+
+
+def promo_target_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 Все пользователи", callback_data="promo_target:all")],
+        [InlineKeyboardButton(text="🆕 Только новые (без покупок)", callback_data="promo_target:new")],
+        [InlineKeyboardButton(text="💤 Давно не продлевали", callback_data="promo_target:inactive")],
+    ])
 
 
 def nodes_kb(nodes: list) -> InlineKeyboardMarkup:

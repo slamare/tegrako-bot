@@ -34,6 +34,8 @@ class AdminSG(StatesGroup):
     # Промокоды
     promo_code = State()
     promo_discount = State()
+    promo_target = State()
+    promo_inactive_days = State()
     promo_max_uses = State()
 
     # Рассылка
