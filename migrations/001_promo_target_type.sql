@@ -1,0 +1,2 @@
+ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS target_type VARCHAR(16) DEFAULT 'all';
+ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS inactive_days INTEGER;

@@ -1,10 +1,16 @@
 version: "3.8"
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 services:
   tegrakobot:
     build: .
     container_name: tegrakobot
     restart: unless-stopped
     env_file: .env
+    logging: *default-logging
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -19,6 +25,7 @@ services:
     image: postgres:17-alpine
     container_name: tegrakobot-db
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_DB: tegrakobot
       POSTGRES_USER: tegrakobot
@@ -36,6 +43,7 @@ services:
     image: postgres:17-alpine
     container_name: tegrakobot-backup
     restart: unless-stopped
+    logging: *default-logging
     entrypoint: ["/bin/sh", "/backup.sh"]
     environment:
       POSTGRES_DB: tegrakobot

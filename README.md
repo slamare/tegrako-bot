@@ -66,8 +66,14 @@ Telegram-бот для TegrakoVPN на базе Remnawave. Управляет п
 ├── db/
 │   ├── models.py
 │   └── dal.py
+├── deploy/
+│   ├── backup.sh        # автобэкап (контейнер tegrakobot-backup)
+│   └── tegrako.sh        # команда управления, ставится в /usr/local/bin/tegrako
+├── migrations/            # SQL-миграции поверх текущей схемы, накатывает tegrako
 ├── main.py
 ├── install.sh
+├── release.sh              # разработчику: релиз стабильной версии
+├── VERSION
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example
@@ -78,92 +84,54 @@ Telegram-бот для TegrakoVPN на базе Remnawave. Управляет п
 
 ## Установка
 
-### 1. Docker
+Одна команда (Ubuntu/Debian, от root):
 
 ```bash
-sudo apt update && sudo apt install docker.io docker-compose-plugin -y
-sudo systemctl enable --now docker
+curl -fsSL https://raw.githubusercontent.com/slamare/tegrako-bot/stable/install.sh | bash
 ```
 
-Если Remnawave уже стоит — Docker есть, шаг пропускай.
+Скрипт сам:
+- ставит Docker/git/curl, если их нет
+- клонирует стабильную ветку в `/opt/tegrakobot`
+- спрашивает токен бота, ID админа, данные уже существующей панели Remnawave (бот её не разворачивает, только подключается по API), пароль БД (авто/ручной), реквизиты оплаты, прокси и вебхук по желанию, брендинг
+- поднимает контейнеры и создаёт docker-сеть `remnawave-network`, если её нет
+- ставит команду `tegrako` в `/usr/local/bin` — дальше всё управление через неё
 
-### 2. Клонирование
+Если бот уже установлен — та же команда просто откроет меню `tegrako`, ничего не переустанавливая.
 
-```bash
-git clone https://github.com/slamare/tegrako-bot
-cd tegrako-bot
-```
-
-### 3. Быстрая установка
-
-```bash
-chmod +x install.sh
-./install.sh
-```
-
-Скрипт по шагам спросит токен бота, ID админа, данные панели Remnawave и настройки оплаты, сам сгенерирует `POSTGRES_PASSWORD` и `WEBHOOK_SECRET`, создаст docker-сеть `remnawave-network`, если её нет, запишет `.env` и предложит сразу поднять контейнеры (`docker compose up -d --build`).
-
-Секрет вебхука скрипт выведет в конце — его нужно вставить в настройки Webhook в Remnawave (см. раздел [Вебхуки Remnawave](#вебхуки-remnawave)).
-
-Если `.env` уже существует, скрипт спросит, перезаписывать его или нет — можно гонять его повторно только чтобы пересоздать сеть и поднять контейнеры.
-
-### 4. Ручная установка (если нужен полный контроль)
+### Ручная установка (если нужен полный контроль)
 
 ```bash
+git clone --branch stable https://github.com/slamare/tegrako-bot /opt/tegrakobot
+cd /opt/tegrakobot
 cp .env.example .env
 nano .env
-```
-
-Обязательные переменные:
-
-```env
-BOT_TOKEN=
-ADMIN_IDS=
-
-DATABASE_URL=postgresql+asyncpg://tegrakobot:password@db:5432/tegrakobot
-POSTGRES_PASSWORD=
-
-PANEL_API_URL=https://your-panel-domain.com
-PANEL_API_KEY=
-DEFAULT_SQUAD_UUID=
-
-BOT_NAME=TegrakoVPN
-
-# Реквизиты оплаты: "Название|Реквизиты" через ;
-PAYMENT_REQUISITES=
-
-NOTIFY_EXPIRY_DAYS=3,1
-
-# Вебхуки от Remnawave (секрет должен совпадать с WEBHOOK_SECRET_HEADER в панели)
-WEBHOOK_SECRET=
-WEBHOOK_PORT=9090
+docker network ls | grep remnawave-network || docker network create remnawave-network
+docker compose up -d --build
+install -m 755 deploy/tegrako.sh /usr/local/bin/tegrako
 ```
 
 `POSTGRES_PASSWORD` должен состоять только из букв/цифр/`-_.` — он подставляется прямо в `DATABASE_URL` без URL-кодирования, символы вроде `@ : / ?` сломают строку подключения.
 
-Опциональные:
+---
 
-```env
-WELCOME_IMAGE_URL=
+## Управление — команда `tegrako`
 
-# Сквад для тарифов, назначенных админом без оплаты (иначе используется DEFAULT_SQUAD_UUID)
-ADMIN_GRANT_SQUAD_UUID=
+После установки всё техническое управление ботом — через `tegrako` (не через ручные docker-команды и не через редактирование `.env` руками):
 
-DEVICE_SLOT_PRICE=0
-REFERRAL_DISCOUNT_PERCENT=5
-
-# MTProto прокси (telemt)
-TELEMT_API_URL=http://host.docker.internal:9091
-TELEMT_PUBLIC_HOST=
-TELEMT_PUBLIC_PORT=8443
+```
+1) Статус                     6) Бэкап вручную
+2) Старт / Стоп / Рестарт     7) Восстановление из бэкапа
+3) Логи                       8) Удаление (5 уровней, с подтверждением)
+4) Обновление                 9) Диагностика
+5) Настройки                  0) Выход
 ```
 
-Дальше — сеть и запуск:
+- **Обновление** тянет стабильный тег, применяет ещё не накатанные SQL-миграции из `migrations/` (отслеживаются в таблице `schema_migrations`), пересобирает контейнеры и обновляет саму команду `tegrako`.
+- **Настройки** — визард по `.env` (панель / платежи / брендинг / вебхук / прокси / бэкапы), с показом текущего значения (секреты маскируются) и предложением перезапустить бота после изменения.
+- **Удаление** — пять уровней от безобидного (очистить логи) до полного сноса, каждый требует явного текстового подтверждения (`yes` или название бота), самые тяжёлые уровни (снос БД / полное удаление) сначала делают автоматический бэкап.
 
-```bash
-docker network ls | grep remnawave-network || docker network create remnawave-network
-docker compose up -d --build
-```
+Бизнес-логика (тарифы, промокоды, пользователи, рассылки) — всё в Telegram через `/admin`, дублировать это в shell-меню не нужно: `tegrako` — это то, чем чинишь бота, когда он **не отвечает** и Telegram-админка бесполезна.
 
 ---
 
@@ -189,29 +157,42 @@ WEBHOOK_SECRET_HEADER=<тот же секрет что в WEBHOOK_SECRET бот�
 
 Контейнер `tegrakobot-backup` каждые `BACKUP_INTERVAL_SECONDS` (по умолчанию 6ч) снимает `pg_dump` в `./backups/`, хранит `BACKUP_RETENTION_DAYS` дней (по умолчанию 14). Папка вне docker-volume — стоит рутинно синкать её (`rsync`/`restic`) на другой диск или хост, т.к. сама по себе она не защищает от потери диска CT102.
 
-Восстановление:
-
-```bash
-gunzip -c backups/tegrakobot_YYYYMMDD_HHMMSS.sql.gz | docker exec -i tegrakobot-db psql -U tegrakobot tegrakobot
-```
+Ручной бэкап, восстановление и снос БД — через `tegrako` (пункты 6/7/8), не руками.
 
 ---
 
 ## Обновление
 
 ```bash
-cd /opt/tegrakobot
-git stash && git pull && git stash drop
-docker compose build --no-cache tegrakobot && docker compose up -d tegrakobot
+tegrako
+# → 4) Обновление
 ```
+
+Тянет стабильный тег, накатывает недостающие миграции из `migrations/`, пересобирает контейнеры, обновляет саму команду `tegrako`. Ручные `git pull && docker compose up -d --build` по-прежнему работают, но не применяют миграции автоматически.
 
 ---
 
-## Логи
+## Логи и диагностика
 
 ```bash
-docker logs tegrakobot -f
+tegrako
+# → 3) Логи, → 9) Диагностика
 ```
+
+Диагностика проверяет DNS внутри контейнера бота, доступность панели/telemt, здоровье БД, свободную память/диск и расхождения `git status` — прежде чем лезть в SSH руками.
+
+---
+
+## Релиз новой версии (для разработки)
+
+```bash
+export GH_TOKEN=ghp_...   # короткоживущий PAT с правами repo
+./release.sh v1.5.0
+```
+
+Бампает `VERSION`, коммитит, двигает теги `v1.5.0` и `stable`, обновляет ассет `install.sh` в GitHub Release. Пока релиз не сделан — `main` может содержать недоделанный функционал, пользователи через `install.sh`/`tegrako update` его не увидят: они всегда тянут `stable`.
+
+Каждая новая версия схемы БД, требующая `ALTER TABLE`, кладётся в `migrations/NNN_описание.sql` (идемпотентно, `IF NOT EXISTS`) — `tegrako` → «Обновление» накатывает её сам.
 
 ---
 
