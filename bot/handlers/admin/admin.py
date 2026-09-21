@@ -21,6 +21,7 @@ from bot.keyboards.admin_kb import (
 from bot.handlers.user.start import LIFETIME_DAYS_THRESHOLD
 from bot.keyboards.user_kb import main_menu_kb
 from bot.services import remnawave
+from bot.services.notifications import try_send_system
 from bot.utils.helpers import edit_or_answer, cleanup_fsm_interaction, delete_later
 from config.settings import settings
 from db import dal
@@ -158,10 +159,9 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
                         user.remnawave_uuid, device_limit=rw.hwid_device_limit + 1
                     )
             await dal.update_payment(session, payment_id, status="approved", approved_by=callback.from_user.id)
-            await callback.bot.send_message(
-                user.telegram_id,
-                "✅ <b>Лимит устройств увеличен!</b>\n\nТеперь вы можете подключить ещё одно устройство.",
-                disable_notification=True, parse_mode="HTML",
+            await try_send_system(
+                callback.bot, session, user.telegram_id,
+                "✅ <b>Лимит устройств увеличен</b>\n\nМожно подключить ещё одно устройство.",
             )
         else:
             if not user.remnawave_uuid and not user.remnawave_username:
@@ -170,6 +170,7 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
                 )
                 return
             squad_uuid = tariff.squad_uuid if tariff else None
+            first_time = not user.remnawave_uuid
             if user.remnawave_uuid:
                 await remnawave.extend_subscription(user.remnawave_uuid, tariff.duration_days)
                 remnawave.invalidate_sub_info_cache(user.remnawave_uuid)
@@ -205,25 +206,21 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
                         if not referrer_is_lifetime:
                             await remnawave.extend_subscription(referrer.remnawave_uuid, ref_days)
                             remnawave.invalidate_sub_info_cache(referrer.remnawave_uuid)
-                            await callback.bot.send_message(
-                                referrer.telegram_id,
-                                f"🎁 <b>Реферальный бонус!</b>\n\n"
-                                f"Ваш друг @{user.username or user.telegram_id} оплатил подписку.\n"
-                                f"Вам начислено <b>+{ref_days} дней</b>.",
-                                parse_mode="HTML", disable_notification=True,
+                            await try_send_system(
+                                callback.bot, session, referrer.telegram_id,
+                                f"🎁 <b>Реферальный бонус</b>\n\n"
+                                f"Друг @{user.username or user.telegram_id} оплатил подписку. "
+                                f"Вам добавлено <b>+{ref_days} дн.</b>",
                             )
                     except Exception:
                         pass
 
-            # Новому пользователю (ни разу не подключался) — инструкция по клиентам
-            ever_connected = await dal.was_notified(session, user.id, "wh_first_connected")
-            if not ever_connected:
+            if first_time:
                 confirm_text = (
-                    f"✅ <b>Оплата подтверждена!</b>\n\n"
+                    f"✅ <b>Оплата подтверждена</b>\n\n"
                     f"Тариф: {tariff.name} ({tariff.duration_days} дн.)\n\n"
                     f"📱 <b>Как подключиться:</b>\n"
-                    f"Перейдите в «👤 Личный кабинет» → «Моя подписка» → "
-                    f"нажмите «🔗 Открыть подписку».\n\n"
+                    f"Откройте «⚙️ Управление подпиской» и нажмите «🔗 Открыть подписку».\n\n"
                     f"Вставьте ссылку в VPN-клиент:\n"
                     f"• iOS — <a href=\"https://apps.apple.com/app/streisand/id6450534064\">Streisand</a>\n"
                     f"• Android — <a href=\"https://play.google.com/store/apps/details?id=com.v2rayng.v2rayNG\">v2rayNG</a>\n"
@@ -231,14 +228,10 @@ async def approve_payment(callback: CallbackQuery, session: AsyncSession):
                 )
             else:
                 confirm_text = (
-                    f"✅ <b>Оплата подтверждена!</b>\n\nТариф: {tariff.name} ({tariff.duration_days} дн.)\n"
-                    f"Перейдите в Личный кабинет → Моя подписка."
+                    f"✅ <b>Оплата подтверждена</b>\n\nТариф: {tariff.name} ({tariff.duration_days} дн.)"
                 )
-            await callback.bot.send_message(
-                user.telegram_id,
-                confirm_text,
-                parse_mode="HTML", disable_notification=True,
-                disable_web_page_preview=True,
+            await try_send_system(
+                callback.bot, session, user.telegram_id, confirm_text, disable_preview=True,
             )
 
         await _mark_payment(callback.message, approved=True)
@@ -259,10 +252,9 @@ async def reject_payment(callback: CallbackQuery, session: AsyncSession):
         await callback.answer("Платёж уже обработан", show_alert=True)
         return
     await dal.update_payment(session, payment_id, status="rejected")
-    await callback.bot.send_message(
-        payment.user.telegram_id,
-        "❌ <b>Оплата отклонена.</b>\nЕсли считаете ошибкой — обратитесь в поддержку.",
-        disable_notification=True, parse_mode="HTML",
+    await try_send_system(
+        callback.bot, session, payment.user.telegram_id,
+        "❌ <b>Оплата отклонена</b>\n\nЕсли это ошибка, напишите в поддержку.",
     )
     await _mark_payment(callback.message, approved=False)
     await callback.answer("❌ Отклонено")

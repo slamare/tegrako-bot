@@ -18,6 +18,7 @@ from bot.keyboards.admin_kb import (
 )
 from bot.keyboards.user_kb import main_menu_kb
 from bot.services import remnawave
+from bot.services.notifications import send_system
 from bot.utils.helpers import edit_or_answer, cleanup_fsm_interaction, delete_later
 from config.settings import settings
 from db import dal
@@ -47,7 +48,7 @@ async def toggle_maintenance(callback: CallbackQuery, session: AsyncSession):
         if u.telegram_id in settings.admin_ids:
             continue
         try:
-            await callback.bot.send_message(u.telegram_id, text, parse_mode="HTML")
+            await send_system(callback.bot, session, u.telegram_id, text, silent=False)
             sent += 1
         except Exception:
             pass

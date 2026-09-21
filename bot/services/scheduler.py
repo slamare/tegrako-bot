@@ -3,17 +3,33 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramForbiddenError
+from aiogram.types import InlineKeyboardButton
 from db import dal
 from bot.services import remnawave
+from bot.services.notifications import send_system, system_kb
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 
+EXPIRED_WINDOW = timedelta(days=2)
+
+RENEW_KB = system_kb(InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="renew_subscription"))
+
+
+async def _push(bot: Bot, session, user, kind: str, meta: str, text: str, kb=None):
+    try:
+        await send_system(bot, session, user.telegram_id, text, kb)
+    except TelegramForbiddenError:
+        pass
+    await dal.log_notification(session, user.id, kind, meta)
+
+
 async def check_expiring_subscriptions(bot: Bot, panel_by_uuid: dict):
     from db.database import async_session_maker
 
-    notify_days = settings.notify_expiry_days
+    notify_days = sorted(settings.notify_expiry_days)
     now = datetime.now(timezone.utc)
 
     async with async_session_maker() as session:
@@ -26,32 +42,39 @@ async def check_expiring_subscriptions(bot: Bot, panel_by_uuid: dict):
                 continue
             try:
                 status = rw.status.value
-                days_left = (rw.expire_at - now).days
+                if status not in ("ACTIVE", "EXPIRED"):
+                    continue
 
-                if status == "EXPIRED":
-                    if not await dal.was_notified(session, user.id, "expired"):
-                        await bot.send_message(
-                            user.telegram_id,
-                            "⚠️ <b>Ваша подписка истекла.</b>\n\nОформите новую — нажмите «🛒 Купить подписку».",
-                            parse_mode="HTML",
-                            disable_notification=True,
-                        )
-                        await dal.log_notification(session, user.id, "expired")
+                remaining = rw.expire_at - now
+                period = rw.expire_at.strftime("%Y-%m-%d")
+                date_str = rw.expire_at.strftime("%d.%m.%Y")
 
-                elif status == "ACTIVE":
-                    for d in notify_days:
-                        if days_left == d:
-                            meta = f"days_{d}"
-                            if not await dal.was_notified(session, user.id, "expiring_soon", meta):
-                                word = "день" if d == 1 else "дня" if d < 5 else "дней"
-                                await bot.send_message(
-                                    user.telegram_id,
-                                    f"⏰ <b>Подписка истекает через {d} {word}!</b>\n\n"
-                                    f"Продлите — нажмите «🛒 Купить подписку».",
-                                    parse_mode="HTML",
-                                    disable_notification=True,
-                                )
-                                await dal.log_notification(session, user.id, "expiring_soon", meta)
+                if remaining <= timedelta(0):
+                    if remaining < -EXPIRED_WINDOW:
+                        continue
+                    if await dal.was_notified(session, user.id, "expired", period, within_days=None):
+                        continue
+                    await _push(
+                        bot, session, user, "expired", period,
+                        f"Подписка закончилась {date_str}. Новую можно оформить кнопкой ниже.",
+                        RENEW_KB,
+                    )
+                    continue
+
+                if status != "ACTIVE":
+                    continue
+                threshold = next((d for d in notify_days if remaining <= timedelta(days=d)), None)
+                if threshold is None:
+                    continue
+                meta = f"{threshold}:{period}"
+                if await dal.was_notified(session, user.id, "expiring_soon", meta, within_days=None):
+                    continue
+                await _push(
+                    bot, session, user, "expiring_soon", meta,
+                    f"Подписка действует до {date_str}. Продлить можно кнопкой ниже.",
+                    RENEW_KB,
+                )
+                await asyncio.sleep(0.05)
 
             except Exception as e:
                 logger.warning(f"Notification check failed for {user.telegram_id}: {e}")
@@ -59,8 +82,9 @@ async def check_expiring_subscriptions(bot: Bot, panel_by_uuid: dict):
 
 async def revoke_expired_mtproto(bot: Bot, panel_by_uuid: dict):
     """Комментирует в telemt тех, у кого подписка истекла более 5 дней назад.
-    
+
     Секрет НЕ сбрасывается в БД — при продлении пользователь восстановится автоматически.
+    Уведомление отправляется один раз за период подписки.
     """
     from db.database import async_session_maker
     from bot.services import telemt as telemt_svc
@@ -70,35 +94,32 @@ async def revoke_expired_mtproto(bot: Bot, panel_by_uuid: dict):
 
     async with async_session_maker() as session:
         users = await dal.get_all_users(session, only_registered=True)
-        to_revoke = [
-            u for u in users
-            if u.mtproto_secret and u.remnawave_uuid
-            and (rw := panel_by_uuid.get(u.remnawave_uuid))
-            and rw.status.value == "EXPIRED"
-            and (now - rw.expire_at) > grace
-        ]
-
-        if not to_revoke:
-            return
-
-        for user in to_revoke:
+        for user in users:
+            if not (user.mtproto_secret and user.remnawave_uuid):
+                continue
+            rw = panel_by_uuid.get(user.remnawave_uuid)
+            if not rw or rw.status.value != "EXPIRED" or (now - rw.expire_at) <= grace:
+                continue
+            period = rw.expire_at.strftime("%Y-%m-%d")
             try:
-                await telemt_svc.comment_user(user.remnawave_username)
+                if await dal.was_notified(session, user.id, "mtproto_off", period, within_days=None):
+                    continue
+                try:
+                    await telemt_svc.comment_user(user.remnawave_username)
+                except Exception as e:
+                    logger.warning(f"telemt comment failed for {user.remnawave_username}: {e}")
+                logger.info(f"MTProto commented for {user.remnawave_username}")
+                try:
+                    await send_system(
+                        bot, session, user.telegram_id,
+                        "📡 <b>MTProto прокси отключён</b>\n\n"
+                        "Подписка не продлевалась более 5 дней. После продления прокси включится снова.",
+                    )
+                except TelegramForbiddenError:
+                    pass
+                await dal.log_notification(session, user.id, "mtproto_off", period)
             except Exception as e:
-                logger.warning(f"telemt comment failed for {user.remnawave_username}: {e}")
-
-        for user in to_revoke:
-            logger.info(f"MTProto commented for {user.remnawave_username}")
-            try:
-                await bot.send_message(
-                    user.telegram_id,
-                    "📡 <b>MTProto прокси деактивирован.</b>\n\n"
-                    "Подписка не оплачена более 5 дней. После продления прокси восстановится автоматически.",
-                    parse_mode="HTML",
-                    disable_notification=True,
-                )
-            except Exception:
-                pass
+                logger.warning(f"MTProto revoke failed for {user.telegram_id}: {e}")
 
 
 async def sync_mtproto_users(bot: Bot, panel_by_uuid: dict):

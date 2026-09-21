@@ -80,6 +80,11 @@ async def main():
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop_event.set)
 
+    try:
+        await bot.delete_webhook(drop_pending_updates=False)
+    except Exception as e:
+        logger.warning(f"delete_webhook failed: {e!r}")
+
     polling_task = asyncio.create_task(
         dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     )

@@ -18,6 +18,7 @@ from bot.keyboards.admin_kb import (
 )
 from bot.keyboards.user_kb import main_menu_kb
 from bot.services import remnawave
+from bot.services.notifications import send_system
 from bot.utils.helpers import edit_or_answer, cleanup_fsm_interaction, delete_later
 from config.settings import settings
 from db import dal
@@ -134,10 +135,9 @@ async def close_ticket(callback: CallbackQuery, session: AsyncSession):
         return
     await dal.close_ticket(session, ticket_id)
     try:
-        await callback.bot.send_message(
-            ticket.user.telegram_id,
-            f"✅ Тикет #{ticket_id} закрыт. Если вопрос остался — создайте новый.",
-            disable_notification=True,
+        await send_system(
+            callback.bot, session, ticket.user.telegram_id,
+            f"✅ Тикет #{ticket_id} закрыт. Если вопрос остался, создайте новый.",
         )
     except Exception:
         pass

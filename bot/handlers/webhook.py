@@ -8,17 +8,13 @@ from aiohttp import web
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from bot.services.notifications import send_system, system_kb, try_send_system
 from config.settings import settings
 from db import dal
 
 logger = logging.getLogger(__name__)
 
-USER_EXPIRED_EVENTS = {"user.expired", "user.limited", "user.disabled"}
-USER_EXPIRING_EVENTS = {
-    "user.expires_in_24_hours": 1,
-    "user.expires_in_48_hours": 2,
-    "user.expires_in_72_hours": 3,
-}
+USER_NOTICE_EVENTS = {"user.limited", "user.disabled"}
 
 ADMIN_NOTIFY_EVENTS = {
     # user scope
@@ -105,65 +101,30 @@ async def _handle_user_event(bot: Bot, event: str, data: dict):
         if not user:
             return
 
-        if event in USER_EXPIRED_EVENTS:
+        if event in USER_NOTICE_EVENTS:
             notif_key = f"wh_{event}"
             if not await dal.was_notified(session, user.id, notif_key):
-                try:
-                    await bot.send_message(tg_id, _expired_text(event), parse_mode="HTML", disable_notification=True)
-                except Exception as e:
-                    logger.warning(f"Webhook notify failed for {tg_id}: {e}")
+                await try_send_system(
+                    bot, session, tg_id, _notice_text(event),
+                    reply_markup=_renew_kb() if event == "user.limited" else None,
+                )
                 await dal.log_notification(session, user.id, notif_key)
-            if event == "user.expired":
-                await _maybe_revoke_mtproto(bot, user, data)
 
-        elif event in USER_EXPIRING_EVENTS:
-            days = USER_EXPIRING_EVENTS[event]
-            meta = f"wh_days_{days}"
-            if not await dal.was_notified(session, user.id, "wh_expiring", meta):
-                word = "день" if days == 1 else "дня" if days < 5 else "дней"
-                try:
-                    await bot.send_message(
-                        tg_id,
-                        f"⏰ <b>Подписка истекает через {days} {word}!</b>\n\nПродлите — нажмите «🛒 Купить подписку».",
-                        parse_mode="HTML",
-                        disable_notification=True,
-                    )
-                except Exception as e:
-                    logger.warning(f"Webhook expiring notify failed for {tg_id}: {e}")
-                await dal.log_notification(session, user.id, "wh_expiring", meta)
-
-        elif event == "user.expired_24_hours_ago":
-            if not await dal.was_notified(session, user.id, "wh_expired_24h"):
-                try:
-                    await bot.send_message(
-                        tg_id,
-                        "😔 <b>Подписка истекла вчера.</b>\n\n"
-                        "Не теряйте доступ надолго — оформите новую подписку прямо сейчас.\n"
-                        "Нажмите «🛒 Купить подписку».",
-                        parse_mode="HTML",
-                        disable_notification=True,
-                    )
-                except Exception as e:
-                    logger.warning(f"Webhook expired_24h notify failed for {tg_id}: {e}")
-                await dal.log_notification(session, user.id, "wh_expired_24h")
+        elif event == "user.expired":
+            await _maybe_revoke_mtproto(bot, user, data)
 
         elif event == "user.not_connected":
             hours_list = data.get("notConnectedHours") or []
             hours = hours_list[0] if hours_list else None
             meta = f"wh_nc_{hours}" if hours else "wh_nc"
             if not await dal.was_notified(session, user.id, "wh_not_connected", meta):
-                hours_str = f" {hours} часов" if hours else ""
-                try:
-                    await bot.send_message(
-                        tg_id,
-                        f"📱 <b>Вы ещё не подключились к VPN!</b>\n\n"
-                        f"Подписка активна, но соединение не установлено{hours_str}.\n"
-                        f"Перейдите в «👤 Личный кабинет» → «Моя подписка» чтобы получить ссылку подключения.",
-                        parse_mode="HTML",
-                        disable_notification=True,
-                    )
-                except Exception as e:
-                    logger.warning(f"Webhook not_connected notify failed for {tg_id}: {e}")
+                hours_str = f" {hours} ч." if hours else ""
+                await try_send_system(
+                    bot, session, tg_id,
+                    f"📱 <b>Подключений пока не было</b>\n\n"
+                    f"Подписка активна, но соединение не устанавливалось{hours_str}. "
+                    f"Ссылку для подключения можно взять в разделе «Управление подпиской».",
+                )
                 await dal.log_notification(session, user.id, "wh_not_connected", meta)
 
 
@@ -187,16 +148,13 @@ async def _handle_torrent_blocker(bot: Bot, event: str, data: dict):
         user = await dal.get_user(session, tg_id)
         if not user:
             return
-    try:
-        await bot.send_message(
-            tg_id,
-            "🏴‍☠️ <b>Обнаружена загрузка торрентов!</b>\n\n"
-            "Загрузка торрентов запрещена правилами сервиса.\n"
+        await try_send_system(
+            bot, session, tg_id,
+            "🏴‍☠️ <b>Обнаружена загрузка торрентов</b>\n\n"
+            "Правила сервиса запрещают торренты. "
             "При повторных нарушениях подписка будет заблокирована.",
-            parse_mode="HTML",
+            silent=False,
         )
-    except Exception as e:
-        logger.warning(f"Torrent warning failed for {tg_id}: {e}")
 
 
 async def _handle_hwid_event(bot: Bot, event: str, data: dict):
@@ -209,26 +167,19 @@ async def _handle_hwid_event(bot: Bot, event: str, data: dict):
         user = await dal.get_user(session, tg_id)
         if not user:
             return
-    if event == "user_hwid_devices.added":
-        platform = data.get("platform") or data.get("device", {}).get("platform") or "новое устройство"
-        model = data.get("deviceModel") or data.get("device", {}).get("deviceModel") or ""
-        device_str = f"{platform} {model}".strip()
-        kb_rows = [
-            [InlineKeyboardButton(text="🔄 Перевыпустить ссылку подписки", callback_data="revoke_subscription_confirm")],
-        ]
-        try:
-            await bot.send_message(
-                tg_id,
-                f"📱 <b>Новое устройство подключено</b>\n\n"
-                f"К вашему аккаунту добавлено: <b>{device_str}</b>\n\n"
-                f"Если это не вы — возможно ваша ссылка подписки скомпрометирована. "
-                f"Сбросьте её кнопкой ниже.",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
-                disable_notification=True,
+        if event == "user_hwid_devices.added":
+            platform = data.get("platform") or data.get("device", {}).get("platform") or "новое устройство"
+            model = data.get("deviceModel") or data.get("device", {}).get("deviceModel") or ""
+            device_str = f"{platform} {model}".strip()
+            await try_send_system(
+                bot, session, tg_id,
+                f"📱 <b>Новое устройство</b>\n\n"
+                f"К аккаунту добавлено: <b>{device_str}</b>\n\n"
+                f"Если это были не вы, ссылку подписки можно перевыпустить кнопкой ниже.",
+                reply_markup=system_kb(
+                    InlineKeyboardButton(text="🔄 Перевыпустить ссылку", callback_data="revoke_subscription_confirm")
+                ),
             )
-        except Exception as e:
-            logger.warning(f"HWID added notify failed for {tg_id}: {e}")
 
 
 async def _notify_admins(bot: Bot, scope: str, event: str, data: dict):
@@ -372,23 +323,23 @@ async def _maybe_revoke_mtproto(bot: Bot, user, data: dict):
                 sa_update(User).where(User.telegram_id == user.telegram_id).values(mtproto_secret=None)
             )
             await session.commit()
-        await bot.send_message(
-            user.telegram_id,
-            "📡 <b>MTProto прокси деактивирован.</b>\n\nПодписка не оплачена более 5 дней. "
-            "После продления прокси восстановится автоматически.",
-            parse_mode="HTML",
-            disable_notification=True,
-        )
+            await send_system(
+                bot, session, user.telegram_id,
+                "📡 <b>MTProto прокси отключён</b>\n\n"
+                "Подписка не продлевалась более 5 дней. После продления прокси включится снова.",
+            )
     except Exception as e:
         logger.warning(f"MTProto revoke via webhook failed for {user.telegram_id}: {e}")
 
 
-def _expired_text(event: str) -> str:
+def _notice_text(event: str) -> str:
     if event == "user.limited":
-        return "📊 <b>Трафик исчерпан.</b>\n\nЛимит трафика достигнут. Оформите новую подписку — нажмите «🛒 Купить подписку»."
-    if event == "user.disabled":
-        return "⛔ <b>Подписка отключена.</b>\n\nЕсли считаете ошибкой — обратитесь в поддержку."
-    return "⚠️ <b>Ваша подписка истекла.</b>\n\nОформите новую — нажмите «🛒 Купить подписку»."
+        return "📊 <b>Трафик исчерпан</b>\n\nЛимит по подписке достигнут. Продлить или сменить тариф можно кнопкой ниже."
+    return "⛔ <b>Подписка отключена</b>\n\nЕсли это ошибка, напишите в поддержку."
+
+
+def _renew_kb() -> InlineKeyboardMarkup:
+    return system_kb(InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="renew_subscription"))
 
 
 async def handle_health(request: web.Request) -> web.Response:

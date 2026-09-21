@@ -445,18 +445,19 @@ async def set_setting(session: AsyncSession, key: str, value: str) -> None:
 # ── Notifications ──────────────────────────────────────────────────────────
 
 async def was_notified(
-    session: AsyncSession, user_id: int, notif_type: str, meta: Optional[str] = None
+    session: AsyncSession, user_id: int, notif_type: str, meta: Optional[str] = None,
+    within_days: Optional[int] = 1,
 ) -> bool:
-    since = datetime.utcnow() - timedelta(days=1)
-    q = select(Notification).where(
+    q = select(Notification.id).where(
         Notification.user_id == user_id,
         Notification.type == notif_type,
-        Notification.sent_at >= since,
     )
+    if within_days is not None:
+        q = q.where(Notification.sent_at >= datetime.utcnow() - timedelta(days=within_days))
     if meta:
         q = q.where(Notification.meta == meta)
-    result = await session.execute(q)
-    return result.scalar_one_or_none() is not None
+    result = await session.execute(q.limit(1))
+    return result.first() is not None
 
 
 async def log_notification(
