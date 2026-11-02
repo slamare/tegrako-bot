@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_SH_VERSION=2
+INSTALL_SH_VERSION=3
 
 BOLD="\033[1m"
 GREEN="\033[32m"
