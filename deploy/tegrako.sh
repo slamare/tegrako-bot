@@ -378,7 +378,8 @@ cmd_diag() {
     local telemt_url; telemt_url=$(env_get TELEMT_API_URL)
     if [ -n "$telemt_url" ]; then
         echo -n "Доступность telemt (${telemt_url}): "
-        curl -sfI --max-time 5 "$telemt_url" >/dev/null 2>&1 && echo "OK" || echo "ОШИБКА или недоступен"
+        local telemt_key; telemt_key=$(env_get TELEMT_API_KEY)
+        curl -sf --max-time 5 -H "Authorization: ${telemt_key}" "${telemt_url%/}/v1/users" >/dev/null 2>&1 && echo "OK" || echo "ОШИБКА, недоступен или неверный ключ"
     fi
 
     echo -n "Здоровье БД: "

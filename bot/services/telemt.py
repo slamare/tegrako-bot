@@ -1,5 +1,7 @@
 """
-Управление telemt MTProto прокси через HTTP API.
+Управление telemt MTProto прокси (MTProxyL) через HTTP API.
+
+Авторизация: заголовок Authorization = TELEMT_API_KEY (должен совпадать с auth_header в [server.api]).
 
 Telemt API поддерживает CRUD и персистит изменения в telemt.toml автоматически:
   POST   /v1/users          — создать пользователя
@@ -16,8 +18,14 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-TELEMT_API_URL = os.getenv("TELEMT_API_URL", "http://127.0.0.1:9091")
+TELEMT_API_URL = os.getenv("TELEMT_API_URL", "http://127.0.0.1:9091").rstrip("/")
+TELEMT_API_KEY = os.getenv("TELEMT_API_KEY", "")
 TIMEOUT = 10.0
+
+
+def _client() -> httpx.AsyncClient:
+    headers = {"Authorization": TELEMT_API_KEY} if TELEMT_API_KEY else {}
+    return httpx.AsyncClient(headers=headers, trust_env=False)
 
 
 def generate_secret() -> str:
@@ -28,7 +36,7 @@ def generate_secret() -> str:
 async def _get_user(username: str) -> Optional[dict]:
     """Получить данные пользователя из API. None если не найден."""
     try:
-        async with httpx.AsyncClient() as client:
+        async with _client() as client:
             resp = await client.get(f"{TELEMT_API_URL}/v1/users", timeout=TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
@@ -46,7 +54,7 @@ async def add_user(username: str, secret: str, max_ips: int = 1) -> None:
     Секрет сохраняется — при повторном создании с тем же секретом ссылка не меняется.
     """
     try:
-        async with httpx.AsyncClient() as client:
+        async with _client() as client:
             existing = await _get_user(username)
             if existing:
                 resp = await client.patch(
@@ -76,7 +84,7 @@ async def add_user(username: str, secret: str, max_ips: int = 1) -> None:
 async def remove_user(username: str) -> None:
     """Удаляет пользователя из telemt (и из конфига)."""
     try:
-        async with httpx.AsyncClient() as client:
+        async with _client() as client:
             resp = await client.delete(
                 f"{TELEMT_API_URL}/v1/users/{username}",
                 timeout=TIMEOUT,

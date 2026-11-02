@@ -179,10 +179,12 @@ if ask_yn "Настроить приём вебхуков от Remnawave-пан�
 fi
 
 TELEMT_API_URL=""
+TELEMT_API_KEY=""
 TELEMT_PUBLIC_HOST=""
 TELEMT_PUBLIC_PORT="8443"
 if ask_yn "Настроить MTProto-прокси (telemt) сейчас?" n; then
     TELEMT_API_URL=$(ask_required "URL telemt API (например http://host.docker.internal:9091)")
+    TELEMT_API_KEY=$(ask_default "API-ключ telemt/MTProxyL (auth_header из [server.api], можно пусто)" "")
     TELEMT_PUBLIC_HOST=$(ask_required "Публичный хост telemt (для ссылок пользователям)")
     TELEMT_PUBLIC_PORT=$(ask_default "Публичный порт telemt" "8443")
 fi
@@ -237,6 +239,7 @@ NODE_CHECK_INTERVAL_MINUTES=5
 
 # MTProto прокси (telemt), опционально
 TELEMT_API_URL=${TELEMT_API_URL}
+TELEMT_API_KEY=${TELEMT_API_KEY}
 TELEMT_PUBLIC_HOST=${TELEMT_PUBLIC_HOST}
 TELEMT_PUBLIC_PORT=${TELEMT_PUBLIC_PORT}
 
